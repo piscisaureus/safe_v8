@@ -4,6 +4,7 @@ use std::mem::size_of_val;
 use std::mem::take;
 use std::mem::MaybeUninit;
 
+use crate::scope::AsEntered;
 use crate::Context;
 use crate::HandleScope;
 use crate::Isolate;
@@ -70,10 +71,13 @@ impl<'tc> TryCatch<'tc> {
   /// Creates a new try/catch block. Note that all TryCatch blocks should be
   /// stack allocated because the memory location itself is compared against
   /// JavaScript try/catch blocks.
+  /// TODO: make TryCatch part of the scope hierarchy.
   #[allow(clippy::new_ret_no_self)]
-  pub fn new(scope: &mut impl AsMut<Isolate>) -> TryCatchScope<'tc> {
+  pub fn new<'i: 'tc>(
+    scope: &'_ mut impl AsEntered<'i, Isolate>,
+  ) -> TryCatchScope<'tc> {
     TryCatchScope(TryCatchState::New {
-      isolate: scope.as_mut(),
+      isolate: scope.entered().as_mut(),
     })
   }
 
@@ -118,7 +122,7 @@ impl<'tc> TryCatch<'tc> {
   /// property is present an empty handle is returned.
   pub fn stack_trace<'sc>(
     &self,
-    _scope: &mut impl AsMut<HandleScope<'sc>>,
+    _scope: &mut impl AsEntered<'sc, HandleScope>,
     context: Local<Context>,
   ) -> Option<Local<'sc, Value>> {
     unsafe { Local::from_raw(v8__TryCatch__StackTrace(&self.0, context)) }

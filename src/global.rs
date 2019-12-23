@@ -1,6 +1,7 @@
 use std::mem::transmute;
 use std::ptr::NonNull;
 
+use crate::scope::AsEntered;
 use crate::HandleScope;
 use crate::Isolate;
 use crate::Local;
@@ -50,11 +51,11 @@ impl<T> Global<T> {
   /// Construct a new Global from an existing handle. When the existing handle
   /// is non-empty, a new storage cell is created pointing to the same object,
   /// and no flags are set.
-  pub fn new_from(
-    isolate: &mut impl AsMut<Isolate>,
+  pub fn new_from<'sc>(
+    isolate: &'_ mut impl AsEntered<'sc, Isolate>,
     other: impl AnyHandle<T>,
   ) -> Self {
-    let isolate = isolate.as_mut();
+    let isolate = isolate.entered().as_mut();
     let other_value = other.read(isolate);
     Self {
       value: other_value
@@ -72,9 +73,9 @@ impl<T> Global<T> {
   /// Construct a Local<T> from this global handle.
   pub fn get<'sc>(
     &self,
-    scope: &'_ mut (impl AsMut<Isolate> + AsMut<HandleScope<'sc>>),
+    scope: &'_ mut (impl AsMut<Isolate> + AsEntered<'sc, HandleScope>),
   ) -> Option<Local<'sc, T>> {
-    self.check_isolate(scope.as_mut());
+    self.check_isolate(scope.entered().as_mut());
     match &self.value {
       None => None,
       Some(p) => unsafe { Local::from_raw(p.as_ptr()) },
@@ -83,12 +84,12 @@ impl<T> Global<T> {
 
   /// If non-empty, destroy the underlying storage cell
   /// and create a new one with the contents of other if other is non empty.
-  pub fn set(
-    &mut self,
-    isolate: &mut impl AsMut<Isolate>,
+  pub fn set<'sc>(
+    &'_ mut self,
+    isolate: &'_ mut impl AsEntered<'sc, Isolate>,
     other: impl AnyHandle<T>,
   ) {
-    let isolate = isolate.as_mut();
+    let isolate = isolate.entered().as_mut();
     self.check_isolate(isolate);
     let other_value = other.read(isolate);
     match (&mut self.value, &other_value) {
@@ -111,7 +112,10 @@ impl<T> Global<T> {
 
   /// If non-empty, destroy the underlying storage cell
   /// IsEmpty() will return true after this call.
-  pub fn reset(&mut self, isolate: &mut impl AsMut<Isolate>) {
+  pub fn reset<'sc>(
+    &'_ mut self,
+    isolate: &'_ mut impl AsEntered<'sc, Isolate>,
+  ) {
     self.set(isolate, None);
   }
 

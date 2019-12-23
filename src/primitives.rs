@@ -1,6 +1,7 @@
 use std::ops::Deref;
 
 use crate::isolate::Isolate;
+use crate::scope::AsEntered;
 use crate::support::Opaque;
 use crate::HandleScope;
 use crate::Local;
@@ -29,22 +30,28 @@ extern "C" {
   fn v8__False(isolate: *mut Isolate) -> *mut Boolean;
 }
 
-pub fn new_null<'sc>(scope: &mut HandleScope<'sc>) -> Local<'sc, Primitive> {
-  unsafe { Local::from_raw(v8__Null(scope.as_mut())) }.unwrap()
+pub fn new_null<'sc>(
+  scope: &mut impl AsEntered<'sc, HandleScope>,
+) -> Local<'sc, Primitive> {
+  unsafe { Local::from_raw(v8__Null(scope.entered().as_mut())) }.unwrap()
 }
 
 pub fn new_undefined<'sc>(
-  scope: &mut HandleScope<'sc>,
+  scope: &mut impl AsEntered<'sc, HandleScope>,
 ) -> Local<'sc, Primitive> {
-  unsafe { Local::from_raw(v8__Undefined(scope.as_mut())) }.unwrap()
+  unsafe { Local::from_raw(v8__Undefined(scope.entered().as_mut())) }.unwrap()
 }
 
-pub fn new_true<'sc>(scope: &mut HandleScope<'sc>) -> Local<'sc, Boolean> {
-  unsafe { Local::from_raw(v8__True(scope.as_mut())) }.unwrap()
+pub fn new_true<'sc>(
+  scope: &mut impl AsEntered<'sc, HandleScope>,
+) -> Local<'sc, Boolean> {
+  unsafe { Local::from_raw(v8__True(scope.entered().as_mut())) }.unwrap()
 }
 
-pub fn new_false<'sc>(scope: &mut HandleScope<'sc>) -> Local<'sc, Boolean> {
-  unsafe { Local::from_raw(v8__False(scope.as_mut())) }.unwrap()
+pub fn new_false<'sc>(
+  scope: &mut impl AsEntered<'sc, HandleScope>,
+) -> Local<'sc, Boolean> {
+  unsafe { Local::from_raw(v8__False(scope.entered().as_mut())) }.unwrap()
 }
 
 impl Deref for Primitive {

@@ -1,12 +1,13 @@
 // Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
 use crate::isolate::Isolate;
+use crate::scope::AsEntered;
 use crate::support::Opaque;
 use crate::HandleScope;
 use crate::Local;
 use crate::Object;
 
 extern "C" {
-  fn v8__Context__New(isolate: &Isolate) -> *mut Context;
+  fn v8__Context__New(isolate: &mut Isolate) -> *mut Context;
   fn v8__Context__Enter(this: &mut Context);
   fn v8__Context__Exit(this: &mut Context);
   fn v8__Context__GetIsolate(this: &mut Context) -> *mut Isolate;
@@ -19,9 +20,13 @@ extern "C" {
 pub struct Context(Opaque);
 
 impl Context {
-  pub fn new<'sc>(scope: &mut HandleScope<'sc>) -> Local<'sc, Context> {
+  pub fn new<'sc>(
+    scope: &mut impl AsEntered<'sc, HandleScope>,
+  ) -> Local<'sc, Context> {
     // TODO: optional arguments;
-    unsafe { Local::from_raw(v8__Context__New(scope.as_mut())).unwrap() }
+    unsafe {
+      Local::from_raw(v8__Context__New(scope.entered().as_mut())).unwrap()
+    }
   }
 
   /// Returns the global proxy object.

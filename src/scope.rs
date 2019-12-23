@@ -33,10 +33,6 @@ where
   Ready(Entered<'s, S>),
 }
 
-/// A wrapper around the an instantiated and entered scope object.
-#[repr(transparent)]
-pub struct Entered<'s, S>(S, PhantomData<&'s ()>);
-
 impl<'s, S> Scope<'s, S>
 where
   S: Scoped<'s>,
@@ -89,6 +85,10 @@ where
   }
 }
 
+/// A wrapper around the an instantiated and entered scope object.
+#[repr(transparent)]
+pub struct Entered<'s, S>(S, PhantomData<&'s ()>);
+
 impl<'s, S> From<S> for Entered<'s, S> {
   fn from(value: S) -> Self {
     Self(value, PhantomData)
@@ -107,7 +107,7 @@ impl<'s, S> DerefMut for Entered<'s, S> {
     unsafe { &mut *(self as *mut _ as *mut S) }
   }
 }
-/*
+
 impl<'s, S, T> AsRef<T> for Entered<'s, S>
 where
   S: AsRef<T>,
@@ -125,24 +125,63 @@ where
     self.deref_mut().as_mut()
   }
 }
-*/
 
-impl<'s, S, T> AsRef<Entered<'s, T>> for Entered<'s, S>
+/// Trait to convert values to Entered<'s, T>.
+pub trait AsEntered<'s, S> {
+  fn entered(&mut self) -> &mut Entered<'s, S>;
+}
+
+// Scope hierarchy.
+// TODO: ContextScope, TryCatch.
+pub trait Implied<T> {}
+
+impl Implied<crate::Isolate> for crate::Locker {}
+impl Implied<crate::Isolate> for crate::FunctionCallbackInfo {}
+impl Implied<crate::Isolate> for crate::PropertyCallbackInfo {}
+impl Implied<crate::Isolate> for crate::HandleScope {}
+impl Implied<crate::Isolate> for crate::EscapableHandleScope {}
+
+impl Implied<crate::Locker> for crate::FunctionCallbackInfo {}
+impl Implied<crate::Locker> for crate::PropertyCallbackInfo {}
+impl Implied<crate::Locker> for crate::HandleScope {}
+impl Implied<crate::Locker> for crate::EscapableHandleScope {}
+
+impl Implied<crate::HandleScope> for crate::FunctionCallbackInfo {}
+impl Implied<crate::HandleScope> for crate::PropertyCallbackInfo {}
+
+// Above a EscapableHandleScope there must be HandleScope or where else would
+// the escaped value go?
+impl Implied<crate::EscapableHandleScope> for crate::HandleScope {}
+
+impl<'s, S, P> AsEntered<'s, P> for S
 where
-  S: AsRef<T>,
+  Self: Implied<P>, //+ AsMut<P>,
 {
-  fn as_ref(&self) -> &Entered<'s, T> {
-    let t: &T = self.deref().as_ref();
-    unsafe { &*(t as *const _ as *const Entered<'s, T>) }
+  fn entered(&mut self) -> &mut Entered<'s, S> {
+    unsafe { &mut *(self.as_mut() as *mut _ as *mut Entered<'s, S>) }
   }
 }
 
-impl<'s, S, T> AsMut<Entered<'s, T>> for Entered<'s, S>
+fn get<T>() -> T {
+  unimplemented!()
+}
+
+fn tes() {
+  let mut hs: Entered<'_, crate::HandleScope> = get();
+  let mut iso = AsEntered::<crate::Isolate>::entered(&mut hs);
+}
+
+// These types should eventually be actual scope types too.
+// For now hack them into the structure by implementing AsEntered on them.
+pub trait ShouldBeScoped {}
+impl ShouldBeScoped for crate::Isolate {}
+impl ShouldBeScoped for crate::Locker {}
+
+impl<'s, S, T> AsEntered<'s, S> for T
 where
-  S: AsMut<T>,
+  T: ShouldBeScoped,
 {
-  fn as_mut(&mut self) -> &mut Entered<'s, T> {
-    let t: &mut T = self.deref_mut().as_mut();
-    unsafe { &mut *(t as *mut _ as *mut Entered<'s, T>) }
+  fn entered(&mut self) -> &mut Entered<'s, S> {
+    unsafe { &mut *(self as *mut _ as *mut Entered<'s, S>) }
   }
 }

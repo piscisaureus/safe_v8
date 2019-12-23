@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ptr::null;
 
+use crate::scope::AsEntered;
 use crate::support::Opaque;
 use crate::Boolean;
 use crate::Context;
@@ -45,7 +46,7 @@ pub struct Script(Opaque);
 impl Script {
   /// A shorthand for ScriptCompiler::Compile().
   pub fn compile<'sc>(
-    _scope: &mut HandleScope<'sc>,
+    _scope: &mut impl AsEntered<'sc, HandleScope>,
     mut context: Local<Context>,
     mut source: Local<String>,
     origin: Option<&ScriptOrigin>,
@@ -66,7 +67,7 @@ impl Script {
   /// UnboundScript::BindToCurrentContext()).
   pub fn run<'sc>(
     &mut self,
-    _scope: &mut HandleScope<'sc>,
+    _scope: &mut impl AsEntered<'sc, HandleScope>,
     mut context: Local<Context>,
   ) -> Option<Local<'sc, Value>> {
     unsafe { Local::from_raw(v8__Script__Run(self, &mut *context)) }

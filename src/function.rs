@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 
+use crate::scope::AsEntered;
 use crate::support::{int, Opaque};
 use crate::Context;
 use crate::HandleScope;
@@ -71,7 +72,7 @@ impl<'cb> ReturnValue<'cb> {
   /// value.
   pub fn get<'sc>(
     &mut self,
-    _scope: &mut HandleScope<'sc>,
+    _scope: &mut impl AsEntered<'sc, HandleScope>,
   ) -> Local<'sc, Value> {
     unsafe { Local::from_raw(v8__ReturnValue__Get(self)).unwrap() }
   }
@@ -132,19 +133,22 @@ pub struct FunctionTemplate(Opaque);
 impl FunctionTemplate {
   /// Creates a function template.
   pub fn new<'sc>(
-    scope: &mut HandleScope<'sc>,
+    scope: &mut impl AsEntered<'sc, HandleScope>,
     callback: extern "C" fn(&FunctionCallbackInfo),
   ) -> Local<'sc, FunctionTemplate> {
     unsafe {
-      Local::from_raw(v8__FunctionTemplate__New(scope.as_mut(), callback))
-        .unwrap()
+      Local::from_raw(v8__FunctionTemplate__New(
+        scope.entered().as_mut(),
+        callback,
+      ))
+      .unwrap()
     }
   }
 
   /// Returns the unique function instance in the current execution context.
   pub fn get_function<'sc>(
     &mut self,
-    _scope: &mut HandleScope<'sc>,
+    _scope: &mut impl AsEntered<'sc, HandleScope>,
     mut context: Local<Context>,
   ) -> Option<Local<'sc, Function>> {
     unsafe {
@@ -165,7 +169,7 @@ impl Function {
   /// Create a function in the current execution context
   /// for a given FunctionCallback.
   pub fn new<'sc>(
-    _scope: &mut HandleScope<'sc>,
+    _scope: &mut impl AsEntered<'sc, HandleScope>,
     mut context: Local<Context>,
     callback: extern "C" fn(&FunctionCallbackInfo),
   ) -> Option<Local<'sc, Function>> {
@@ -174,7 +178,7 @@ impl Function {
 
   pub fn call<'sc>(
     &mut self,
-    _scope: &mut HandleScope<'sc>,
+    _scope: &mut impl AsEntered<'sc, HandleScope>,
     mut context: Local<Context>,
     mut recv: Local<Value>,
     arc: i32,

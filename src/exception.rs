@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::isolate::Isolate;
+use crate::scope::AsEntered;
 use crate::support::int;
 use crate::support::Opaque;
 use crate::HandleScope;
@@ -46,7 +47,10 @@ impl StackTrace {
 pub struct Message(Opaque);
 
 impl Message {
-  pub fn get<'sc>(&self, _scope: &mut HandleScope<'sc>) -> Local<'sc, String> {
+  pub fn get<'sc>(
+    &self,
+    _scope: &mut impl AsEntered<'sc, HandleScope>,
+  ) -> Local<'sc, String> {
     unsafe { Local::from_raw(v8__Message__Get(self)) }.unwrap()
   }
 
@@ -60,12 +64,12 @@ impl Message {
 /// Will try to reconstruct the original stack trace from the exception value,
 /// or capture the current stack trace if not available.
 pub fn create_message<'sc>(
-  scope: &mut HandleScope<'sc>,
+  scope: &mut impl AsEntered<'sc, HandleScope>,
   mut exception: Local<'sc, Value>,
 ) -> Local<'sc, Message> {
   unsafe {
     Local::from_raw(v8__Exception__CreateMessage(
-      scope.as_mut(),
+      scope.entered().as_mut(),
       &mut *exception,
     ))
   }
@@ -75,21 +79,21 @@ pub fn create_message<'sc>(
 /// Returns the original stack trace that was captured at the creation time
 /// of a given exception, or an empty handle if not available.
 pub fn get_stack_trace<'sc>(
-  _scope: &mut HandleScope<'sc>,
+  _scope: &mut impl AsEntered<'sc, HandleScope>,
   mut exception: Local<Value>,
 ) -> Option<Local<'sc, StackTrace>> {
   unsafe { Local::from_raw(v8__Exception__GetStackTrace(&mut *exception)) }
 }
 
 pub fn range_error<'sc>(
-  _scope: &mut HandleScope<'sc>,
+  _scope: &mut impl AsEntered<'sc, HandleScope>,
   mut message: Local<String>,
 ) -> Local<'sc, Value> {
   unsafe { Local::from_raw(v8__Exception__RangeError(&mut *message)) }.unwrap()
 }
 
 pub fn reference_error<'sc>(
-  _scope: &mut HandleScope<'sc>,
+  _scope: &mut impl AsEntered<'sc, HandleScope>,
   mut message: Local<String>,
 ) -> Local<'sc, Value> {
   unsafe { Local::from_raw(v8__Exception__ReferenceError(&mut *message)) }
@@ -97,21 +101,21 @@ pub fn reference_error<'sc>(
 }
 
 pub fn syntax_error<'sc>(
-  _scope: &mut HandleScope<'sc>,
+  _scope: &mut impl AsEntered<'sc, HandleScope>,
   mut message: Local<String>,
 ) -> Local<'sc, Value> {
   unsafe { Local::from_raw(v8__Exception__SyntaxError(&mut *message)) }.unwrap()
 }
 
 pub fn type_error<'sc>(
-  _scope: &mut HandleScope<'sc>,
+  _scope: &mut impl AsEntered<'sc, HandleScope>,
   mut message: Local<String>,
 ) -> Local<'sc, Value> {
   unsafe { Local::from_raw(v8__Exception__TypeError(&mut *message)) }.unwrap()
 }
 
 pub fn error<'sc>(
-  _scope: &mut HandleScope<'sc>,
+  _scope: &mut impl AsEntered<'sc, HandleScope>,
   mut message: Local<String>,
 ) -> Local<'sc, Value> {
   unsafe { Local::from_raw(v8__Exception__Error(&mut *message)) }.unwrap()

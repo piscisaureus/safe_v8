@@ -1,6 +1,7 @@
 use std::ops::Deref;
 
 use crate::isolate::Isolate;
+use crate::scope::AsEntered;
 use crate::support::Opaque;
 use crate::HandleScope;
 use crate::Local;
@@ -30,7 +31,7 @@ impl Object {
   /// All properties will be created as enumerable, configurable
   /// and writable properties.
   pub fn new<'sc>(
-    scope: &mut HandleScope<'sc>,
+    scope: &mut impl AsEntered<'sc, HandleScope>,
     mut prototype_or_null: Local<'sc, Value>,
     names: Vec<Local<'sc, Name>>,
     values: Vec<Local<'sc, Value>>,
@@ -49,7 +50,7 @@ impl Object {
     }
     unsafe {
       Local::from_raw(v8__Object__New(
-        scope.as_mut(),
+        scope.entered().as_mut(),
         &mut *prototype_or_null,
         names_.as_mut_ptr(),
         values_.as_mut_ptr(),

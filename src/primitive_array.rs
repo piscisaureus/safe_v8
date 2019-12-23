@@ -1,4 +1,5 @@
 // Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
+use crate::scope::AsEntered;
 use crate::support::int;
 use crate::support::Opaque;
 use crate::HandleScope;
@@ -38,11 +39,12 @@ pub struct PrimitiveArray(Opaque);
 
 impl PrimitiveArray {
   pub fn new<'sc>(
-    scope: &mut HandleScope<'sc>,
+    scope: &mut impl AsEntered<'sc, HandleScope>,
     length: usize,
   ) -> Local<'sc, PrimitiveArray> {
     unsafe {
-      let ptr = v8__PrimitiveArray__New(scope.as_mut(), length as int);
+      let ptr =
+        v8__PrimitiveArray__New(scope.entered().as_mut(), length as int);
       Local::from_raw(ptr).unwrap()
     }
   }
@@ -53,22 +55,28 @@ impl PrimitiveArray {
 
   pub fn set<'sc>(
     &self,
-    scope: &mut HandleScope<'sc>,
+    scope: &mut impl AsEntered<'sc, HandleScope>,
     index: usize,
     item: Local<'_, Primitive>,
   ) {
     unsafe {
-      v8__PrimitiveArray__Set(self, scope.as_mut(), index as int, &item)
+      v8__PrimitiveArray__Set(
+        self,
+        scope.entered().as_mut(),
+        index as int,
+        &item,
+      )
     }
   }
 
   pub fn get<'sc>(
     &self,
-    scope: &mut HandleScope<'sc>,
+    scope: &mut impl AsEntered<'sc, HandleScope>,
     index: usize,
   ) -> Local<'sc, Primitive> {
     unsafe {
-      let ptr = v8__PrimitiveArray__Get(self, scope.as_mut(), index as int);
+      let ptr =
+        v8__PrimitiveArray__Get(self, scope.entered().as_mut(), index as int);
       Local::from_raw(ptr).unwrap()
     }
   }

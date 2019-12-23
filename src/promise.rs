@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 
+use crate::scope::AsEntered;
 use crate::support::MaybeBool;
 use crate::support::Opaque;
 use crate::Context;
@@ -82,7 +83,7 @@ impl Promise {
   /// be pending.
   pub fn result<'sc>(
     &mut self,
-    _scope: &mut HandleScope<'sc>,
+    _scope: &mut impl AsEntered<'sc, HandleScope>,
   ) -> Local<'sc, Value> {
     unsafe { Local::from_raw(v8__Promise__Result(&mut *self)).unwrap() }
   }
@@ -148,7 +149,7 @@ pub struct PromiseResolver(Opaque);
 impl PromiseResolver {
   /// Create a new resolver, along with an associated promise in pending state.
   pub fn new<'sc>(
-    _scope: &mut HandleScope<'sc>,
+    _scope: &mut impl AsEntered<'sc, HandleScope>,
     mut context: Local<'sc, Context>,
   ) -> Option<Local<'sc, PromiseResolver>> {
     unsafe { Local::from_raw(v8__Promise__Resolver__New(&mut *context)) }
@@ -157,7 +158,7 @@ impl PromiseResolver {
   /// Extract the associated promise.
   pub fn get_promise<'sc>(
     &mut self,
-    _scope: &mut HandleScope<'sc>,
+    _scope: &mut impl AsEntered<'sc, HandleScope>,
   ) -> Local<'sc, Promise> {
     unsafe {
       Local::from_raw(v8__Promise__Resolver__GetPromise(&mut *self)).unwrap()
