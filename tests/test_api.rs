@@ -212,6 +212,7 @@ fn array_buffer() {
   {
     let mut hs = v8::HandleScope::new(&mut locker);
     let scope = hs.enter();
+    let mut cs = v8::ContextScope::new(scope, v8::Context::new(scope));
     let mut context = v8::Context::new(scope);
     context.enter();
 

@@ -19,9 +19,13 @@ where
 
 /// A RAII scope wrapper object that will, when the `enter()` method is called,
 /// initialize and activate the guarded object.
-pub struct Scope<'s, S>(ScopeState<'s, S>)
+pub struct Scope<'s, S, P>
 where
-  S: Scoped<'s>;
+  S: Scoped<'s>,
+{
+  parent: &'s mut P,
+  state: ScopeState<'s, S>,
+}
 
 enum ScopeState<'s, S>
 where

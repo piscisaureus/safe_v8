@@ -82,7 +82,7 @@ pub mod V8;
 
 pub use array_buffer::*;
 pub use callback_scope::CallbackScope;
-pub use context::Context;
+pub use context::{Context, ContextScope};
 pub use exception::*;
 pub use external_references::ExternalReferences;
 pub use function::{

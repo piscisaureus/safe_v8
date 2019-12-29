@@ -1,6 +1,11 @@
 // Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
+use std::mem::MaybeUninit;
+
 use crate::isolate::Isolate;
+use crate::scope::Scope;
+use crate::scope::Scoped;
 use crate::support::Opaque;
+use crate::InIsolate;
 use crate::Local;
 use crate::Object;
 use crate::ToLocal;
@@ -46,19 +51,49 @@ impl Context {
   /// and run is compiled and run in this context.  If another context
   /// is already entered, this old context is saved so it can be
   /// restored when the new context is exited.
-  pub fn enter(&mut self) {
+  fn enter(&mut self) {
     // TODO: enter/exit should be controlled by a scope.
     unsafe { v8__Context__Enter(self) };
   }
 
   /// Exit this context.  Exiting the current context restores the
   /// context that was in place when entering the current context.
-  pub fn exit(&mut self) {
+  fn exit(&mut self) {
     // TODO: enter/exit should be controlled by a scope.
     unsafe { v8__Context__Exit(self) };
   }
 
   pub fn get_isolate(&mut self) -> &mut Isolate {
     unsafe { v8__Context__GetIsolate(self) }
+  }
+}
+
+pub struct ContextScope<'s> {
+  context: Local<'s, Context>,
+}
+
+unsafe impl<'s> Scoped<'s> for ContextScope<'s> {
+  type Args = Local<'s, Context>;
+  fn enter_scope(buf: &mut MaybeUninit<Self>, mut context: Local<'s, Context>) {
+    *buf = MaybeUninit::new(ContextScope { context });
+    context.enter();
+  }
+}
+
+impl<'s> Drop for ContextScope<'s> {
+  fn drop(&mut self) {
+    self.context.exit();
+  }
+}
+
+impl<'s> ContextScope<'s> {
+  pub fn new(context: Local<'s, Context>) -> Scope<Self> {
+    Scope::new(context)
+  }
+}
+
+impl<'s> InIsolate for crate::scope::Entered<'s, ContextScope<'s>> {
+  fn isolate(&mut self) -> &mut Isolate {
+    self.context.get_isolate()
   }
 }
