@@ -893,7 +893,8 @@ v8::Value* v8__ReturnValue__Get(const v8::ReturnValue<v8::Value>& self) {
   return local_to_ptr(self.Get());
 }
 
-v8::Isolate* v8__ReturnValue__GetIsolate(v8::ReturnValue<v8::Value>& self) {
+v8::Isolate* v8__ReturnValue__GetIsolate(
+    const v8::ReturnValue<v8::Value>& self) {
   return self.GetIsolate();
 }
 
@@ -1109,10 +1110,6 @@ v8::Promise* v8__Promise__Then2(v8::Promise* self,
                                 v8::Local<v8::Function> on_fulfilled,
                                 v8::Local<v8::Function> on_rejected) {
   return maybe_local_to_ptr(self->Then(context, on_fulfilled, on_rejected));
-}
-
-v8::Isolate* v8__Promise__GetIsolate(v8::Promise* self) {
-  return self->GetIsolate();
 }
 
 v8::PromiseRejectEvent v8__PromiseRejectMessage__GetEvent(

@@ -199,12 +199,6 @@ pub enum PromiseRejectEvent {
 #[repr(C)]
 pub struct PromiseRejectMessage<'msg>([usize; 3], PhantomData<&'msg ()>);
 
-impl<'msg> InIsolate for PromiseRejectMessage<'msg> {
-  fn isolate(&mut self) -> &mut Isolate {
-    self.get_isolate()
-  }
-}
-
 impl<'msg> PromiseRejectMessage<'msg> {
   pub fn get_promise(&self) -> Local<'msg, Promise> {
     unsafe {

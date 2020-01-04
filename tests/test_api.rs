@@ -4,7 +4,9 @@
 extern crate lazy_static;
 
 use rusty_v8 as v8;
-use rusty_v8::{new_null, FunctionCallbackInfo, InIsolate, Local, ToLocal};
+use rusty_v8::{
+  new_null, CallbackScope, FunctionCallbackScope, InIsolate, Local, ToLocal,
+};
 use std::convert::{Into, TryFrom, TryInto};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -218,7 +220,7 @@ fn microtasks() {
     context.enter();
 
     static CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
-    extern "C" fn cb(_info: &FunctionCallbackInfo) {
+    extern "C" fn cb(_info: FunctionCallbackScope) {
       CALL_COUNT.fetch_add(1, Ordering::SeqCst);
     }
     let function = v8::Function::new(scope, context, cb).unwrap();
@@ -479,15 +481,13 @@ fn add_message_listener() {
   static CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
 
   extern "C" fn check_message_0(
-    mut message: Local<v8::Message>,
+    message: Local<v8::Message>,
     _exception: Local<v8::Value>,
   ) {
-    let isolate = message.get_isolate();
-    let context = isolate.get_current_context();
-    let mut cbs = v8::CallbackScope::new(message);
-    let scope = cbs.enter();
-    let mut hs = v8::HandleScope::new(scope);
-    let scope = hs.enter();
+    let mut sc = v8::CallbackScope::new(message);
+    let mut sc = v8::HandleScope::new(sc.enter());
+    let scope = sc.enter();
+    let context = scope.isolate().get_current_context();
     let message_str = message.get(scope);
     assert_eq!(message_str.to_rust_string_lossy(scope), "Uncaught foo");
     assert_eq!(Some(1), message.get_line_number(context));
@@ -1032,15 +1032,11 @@ fn promise_rejected() {
   drop(locker);
 }
 
-extern "C" fn fn_callback(info: &FunctionCallbackInfo) {
+extern "C" fn fn_callback(info: FunctionCallbackScope) {
   assert_eq!(info.length(), 0);
   {
-    let rv = &mut info.get_return_value();
-    #[allow(mutable_transmutes)]
-    #[allow(clippy::transmute_ptr_to_ptr)]
-    let info: &mut FunctionCallbackInfo = unsafe { std::mem::transmute(info) };
     {
-      let mut hs = v8::HandleScope::new(info);
+      let mut hs = v8::EscapableHandleScope::new(info);
       let scope = hs.enter();
       let s = v8::String::new(scope, "Hello callback!").unwrap();
       let value: Local<v8::Value> = s.into();
@@ -1051,19 +1047,15 @@ extern "C" fn fn_callback(info: &FunctionCallbackInfo) {
   }
 }
 
-extern "C" fn fn_callback2(info: &FunctionCallbackInfo) {
-  #[allow(mutable_transmutes)]
-  #[allow(clippy::transmute_ptr_to_ptr)]
-  let info: &mut FunctionCallbackInfo = unsafe { std::mem::transmute(info) };
+extern "C" fn fn_callback2(info: FunctionCallbackScope) {
   assert_eq!(info.length(), 2);
-  let isolate = info.get_isolate();
-  let mut locker = v8::Locker::new(&isolate);
-  let mut context = isolate.get_current_context();
+  let isolate = info.isolate();
+  let context = isolate.get_current_context();
   let arg1 = info.get_argument(0);
   let arg2 = info.get_argument(1);
   let rv = &mut info.get_return_value();
   {
-    let mut hs = v8::HandleScope::new(&mut locker);
+    let mut hs = v8::HandleScope::new(info);
     let scope = hs.enter();
     context.enter();
 
@@ -1129,22 +1121,21 @@ fn function() {
 }
 
 extern "C" fn promise_reject_callback(msg: v8::PromiseRejectMessage) {
+  let mut scope = CallbackScope::new(&msg);
+  let scope = scope.enter();
   let event = msg.get_event();
   assert_eq!(event, v8::PromiseRejectEvent::PromiseRejectWithNoHandler);
   let mut promise = msg.get_promise();
   assert_eq!(promise.state(), v8::PromiseState::Rejected);
-  let mut promise_obj: Local<v8::Object> = promise.into();
-  let isolate = promise_obj.get_isolate();
+  let isolate = scope.isolate();
   let value = msg.get_value();
-  let mut locker = v8::Locker::new(isolate);
   {
-    let mut hs = v8::HandleScope::new(&mut locker);
+    let mut hs = v8::HandleScope::new(scope);
     let scope = hs.enter();
     let value_str = value.to_string(scope).unwrap();
     let rust_str = value_str.to_rust_string_lossy(scope);
     assert_eq!(rust_str, "promise rejected".to_string());
   }
-  drop(locker);
 }
 
 #[test]
@@ -1754,11 +1745,7 @@ fn shared_array_buffer() {
       ),
       v8::MaybeBool::JustTrue
     );
-    let source = v8::String::new(
-      s,
-      "sharedBytes = new Uint8Array(shared); sharedBytes[2] = 16; sharedBytes[14] = 62; sharedBytes[5] + sharedBytes[12]",
-    )
-        .unwrap();
+    let source = v8::String::new(s, "sharedBytes = new Uint8Array(shared); sharedBytes[2] = 16; sharedBytes[14] = 62; sharedBytes[5] + sharedBytes[12]").unwrap();
     let mut script = v8::Script::compile(s, context, source, None).unwrap();
     source.to_rust_string_lossy(s);
     let result: Local<v8::Integer> =

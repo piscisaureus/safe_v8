@@ -28,11 +28,9 @@ impl Locker {
       buf.assume_init()
     }
   }
-}
 
-impl InIsolate for Locker {
-  fn isolate(&mut self) -> &mut Isolate {
-    unsafe { &mut *self.isolate }
+  pub(crate) fn get_raw_isolate_(&self) -> *mut Isolate {
+    self.isolate
   }
 }
 

@@ -28,7 +28,6 @@ extern "C" {
     name: *const Name,
     getter: AccessorNameGetterCallback,
   ) -> MaybeBool;
-  fn v8__Object__GetIsolate(object: &Object) -> &mut Isolate;
 
   fn v8__Object__Get(
     object: &Object,
@@ -143,11 +142,6 @@ impl Object {
     getter: AccessorNameGetterCallback,
   ) -> MaybeBool {
     unsafe { v8__Object__SetAccessor(self, &*context, &*name, getter) }
-  }
-
-  /// Return the isolate to which the Object belongs to.
-  pub fn get_isolate(&mut self) -> &Isolate {
-    unsafe { v8__Object__GetIsolate(self) }
   }
 
   /// Returns the identity hash for this object. The current implementation
