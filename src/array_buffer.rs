@@ -1,8 +1,15 @@
+use std::ffi::c_void;
+use std::mem;
+use std::ops::Deref;
+use std::ops::DerefMut;
+use std::ptr;
+
 use crate::support::long;
 use crate::support::Delete;
 use crate::support::Opaque;
 use crate::support::Shared;
 use crate::support::SharedRef;
+use crate::support::ToCFn;
 use crate::support::UniqueRef;
 use crate::ArrayBuffer;
 use crate::InIsolate;
@@ -25,17 +32,20 @@ extern "C" {
   fn v8__ArrayBuffer__GetBackingStore(
     self_: *const ArrayBuffer,
   ) -> SharedRef<BackingStore>;
-  fn v8__ArrayBuffer__NewBackingStore(
+  fn v8__ArrayBuffer__NewBackingStore__allocate(
     isolate: *mut Isolate,
     byte_length: usize,
   ) -> *mut BackingStore;
-  fn v8__ArrayBuffer__NewBackingStore_FromRaw(
+  fn v8__ArrayBuffer__NewBackingStore__import(
     data: *mut std::ffi::c_void,
     byte_length: usize,
     deleter: BackingStoreDeleterCallback,
+    deleter_Data: *mut std::ffi::c_void,
   ) -> SharedRef<BackingStore>;
 
-  fn v8__BackingStore__Data(self_: &mut BackingStore) -> *mut std::ffi::c_void;
+  fn v8__BackingStore__Data(
+    self_: *const BackingStore,
+  ) -> *mut std::ffi::c_void;
   fn v8__BackingStore__ByteLength(self_: &BackingStore) -> usize;
   fn v8__BackingStore__IsShared(self_: &BackingStore) -> bool;
   fn v8__BackingStore__DELETE(self_: &mut BackingStore);
@@ -91,20 +101,11 @@ impl Delete for Allocator {
   }
 }
 
-pub type BackingStoreDeleterCallback = unsafe extern "C" fn(
+pub type BackingStoreDeleterCallback = extern "C" fn(
   data: *mut std::ffi::c_void,
   byte_length: usize,
   deleter_data: *mut std::ffi::c_void,
 );
-
-pub unsafe extern "C" fn backing_store_deleter_callback(
-  data: *mut std::ffi::c_void,
-  _byte_length: usize,
-  _deleter_data: *mut std::ffi::c_void,
-) {
-  let b = Box::from_raw(data);
-  drop(b)
-}
 
 /// A wrapper around the backing store (i.e. the raw memory) of an array buffer.
 /// See a document linked in http://crbug.com/v8/9908 for more information.
@@ -123,21 +124,25 @@ pub struct BackingStore([usize; 6]);
 unsafe impl Send for BackingStore {}
 
 impl BackingStore {
-  /// Returns a rust u8 slice with a lifetime equal to the lifetime of the BackingStore.
-  pub fn data_bytes<'a>(&'a mut self) -> &'a mut [u8] {
+  /// Returns a [u8] slice with a lifetime equal to the lifetime of the
+  /// BackingStore.
+  pub fn data<'a>(&'a self) -> &'a [u8] {
+    unsafe {
+      std::slice::from_raw_parts::<'a, u8>(
+        v8__BackingStore__Data(self) as *mut u8,
+        self.byte_length(),
+      )
+    }
+  }
+  /// Returns a mutable [u8] slice with a lifetime equal to the lifetime of the
+  /// BackingStore.
+  pub fn data_mut<'a>(&'a mut self) -> &'a mut [u8] {
     unsafe {
       std::slice::from_raw_parts_mut::<'a, u8>(
         v8__BackingStore__Data(self) as *mut u8,
         self.byte_length(),
       )
     }
-  }
-
-  /// Return a pointer to the beginning of the memory block for this backing
-  /// store. The pointer is only valid as long as this backing store object
-  /// lives.
-  pub fn data(&mut self) -> &mut std::ffi::c_void {
-    unsafe { &mut *v8__BackingStore__Data(self) }
   }
 
   /// The length (in bytes) of this backing store.
@@ -155,6 +160,19 @@ impl BackingStore {
 impl Delete for BackingStore {
   fn delete(&mut self) {
     unsafe { v8__BackingStore__DELETE(self) };
+  }
+}
+
+impl Deref for BackingStore {
+  type Target = [u8];
+  fn deref(&self) -> &Self::Target {
+    self.data()
+  }
+}
+
+impl DerefMut for BackingStore {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    self.data_mut()
   }
 }
 
@@ -200,6 +218,7 @@ impl ArrayBuffer {
   pub fn byte_length(&self) -> usize {
     unsafe { v8__ArrayBuffer__ByteLength(self) }
   }
+
   pub fn get_backing_store(&self) -> SharedRef<BackingStore> {
     unsafe { v8__ArrayBuffer__GetBackingStore(self) }
   }
@@ -216,13 +235,18 @@ impl ArrayBuffer {
     byte_length: usize,
   ) -> UniqueRef<BackingStore> {
     unsafe {
-      UniqueRef::from_raw(v8__ArrayBuffer__NewBackingStore(
+      UniqueRef::from_raw(v8__ArrayBuffer__NewBackingStore__allocate(
         scope.isolate(),
         byte_length,
       ))
     }
   }
+}
 
+impl<T> From<T> for SharedRef<BackingStore>
+where
+  T: Deref<Target = [u8]> + DerefMut + 'static,
+{
   /// Returns a new standalone BackingStore that takes over the ownership of
   /// the given buffer.
   ///
@@ -230,15 +254,24 @@ impl ArrayBuffer {
   ///
   /// The result can be later passed to ArrayBuffer::New. The raw pointer
   /// to the buffer must not be passed again to any V8 API function.
-  pub unsafe fn new_backing_store_from_boxed_slice(
-    data: Box<[u8]>,
-  ) -> SharedRef<BackingStore> {
-    let byte_length = data.len();
-    let data_ptr = Box::into_raw(data) as *mut std::ffi::c_void;
-    v8__ArrayBuffer__NewBackingStore_FromRaw(
-      data_ptr,
-      byte_length,
-      backing_store_deleter_callback,
-    )
+  fn from(mut buf: T) -> Self {
+    let slice: &mut [u8] = &mut *buf;
+    let data = slice.as_mut_ptr() as *mut c_void;
+    let byte_length = slice.len();
+
+    let deleter = |_: *mut c_void, _: usize, p: *mut c_void| unsafe {
+      ptr::read(p as *mut T);
+    };
+    let deleter_data = &mut buf as *mut _ as *mut c_void;
+    mem::forget(buf);
+
+    unsafe {
+      v8__ArrayBuffer__NewBackingStore__import(
+        data,
+        byte_length,
+        deleter.to_c_fn(),
+        deleter_data,
+      )
+    }
   }
 }

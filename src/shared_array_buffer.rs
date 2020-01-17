@@ -1,16 +1,20 @@
-use crate::array_buffer::backing_store_deleter_callback;
 use crate::support::SharedRef;
 use crate::BackingStore;
-use crate::BackingStoreDeleterCallback;
+use crate::InIsolate;
 use crate::Isolate;
 use crate::Local;
 use crate::SharedArrayBuffer;
 use crate::ToLocal;
+use crate::UniqueRef;
 
 extern "C" {
   fn v8__SharedArrayBuffer__New(
     isolate: *mut Isolate,
     byte_length: usize,
+  ) -> *mut SharedArrayBuffer;
+  fn v8__SharedArrayBuffer__New__backing_store(
+    isolate: *mut Isolate,
+    backing_store: *mut SharedRef<BackingStore>,
   ) -> *mut SharedArrayBuffer;
   fn v8__SharedArrayBuffer__New__DEPRECATED(
     isolate: *mut Isolate,
@@ -23,15 +27,6 @@ extern "C" {
   fn v8__SharedArrayBuffer__GetBackingStore(
     self_: *const SharedArrayBuffer,
   ) -> SharedRef<BackingStore>;
-  fn v8__SharedArrayBuffer__NewBackingStore_FromRaw(
-    data: *mut std::ffi::c_void,
-    byte_length: usize,
-    deleter: BackingStoreDeleterCallback,
-  ) -> SharedRef<BackingStore>;
-  fn v8__SharedArrayBuffer__New__backing_store(
-    isolate: *mut Isolate,
-    backing_store: *mut SharedRef<BackingStore>,
-  ) -> *mut SharedArrayBuffer;
 }
 
 impl SharedArrayBuffer {
@@ -48,6 +43,17 @@ impl SharedArrayBuffer {
     }
   }
 
+  pub fn new_with_backing_store<'sc>(
+    scope: &mut impl ToLocal<'sc>,
+    backing_store: &mut SharedRef<BackingStore>,
+  ) -> Local<'sc, SharedArrayBuffer> {
+    let isolate = scope.isolate();
+    let ptr = unsafe {
+      v8__SharedArrayBuffer__New__backing_store(isolate, &mut *backing_store)
+    };
+    unsafe { scope.to_local(ptr) }.unwrap()
+  }
+
   /// Data length in bytes.
   pub fn byte_length(&self) -> usize {
     unsafe { v8__SharedArrayBuffer__ByteLength(self) }
@@ -61,33 +67,17 @@ impl SharedArrayBuffer {
     unsafe { v8__SharedArrayBuffer__GetBackingStore(self) }
   }
 
-  pub fn new_with_backing_store<'sc>(
-    scope: &mut impl ToLocal<'sc>,
-    backing_store: &mut SharedRef<BackingStore>,
-  ) -> Local<'sc, SharedArrayBuffer> {
-    let isolate = scope.isolate();
-    let ptr = unsafe {
-      v8__SharedArrayBuffer__New__backing_store(isolate, &mut *backing_store)
-    };
-    unsafe { scope.to_local(ptr) }.unwrap()
-  }
-
-  /// Returns a new standalone BackingStore that takes over the ownership of
-  /// the given buffer.
+  /// Returns a new standalone BackingStore that is allocated using the array
+  /// buffer allocator of the isolate. The result can be later passed to
+  /// ArrayBuffer::New.
   ///
-  /// The destructor of the BackingStore frees owned buffer memory.
-  ///
-  /// The result can be later passed to SharedArrayBuffer::New. The raw pointer
-  /// to the buffer must not be passed again to any V8 API function.
-  pub unsafe fn new_backing_store_from_boxed_slice(
-    data: Box<[u8]>,
-  ) -> SharedRef<BackingStore> {
-    let byte_length = data.len();
-    let data_ptr = Box::into_raw(data) as *mut std::ffi::c_void;
-    v8__SharedArrayBuffer__NewBackingStore_FromRaw(
-      data_ptr,
-      byte_length,
-      backing_store_deleter_callback,
-    )
+  /// If the allocator returns nullptr, then the function may cause GCs in the
+  /// given isolate and re-try the allocation. If GCs do not help, then the
+  /// function will crash with an out-of-memory error.
+  pub fn new_backing_store(
+    scope: &mut impl InIsolate,
+    byte_length: usize,
+  ) -> UniqueRef<BackingStore> {
+    crate::ArrayBuffer::new_backing_store(scope, byte_length)
   }
 }

@@ -247,19 +247,21 @@ fn array_buffer() {
     let ab = v8::ArrayBuffer::new(scope, 42);
     assert_eq!(42, ab.byte_length());
 
-    let bs = v8::ArrayBuffer::new_backing_store(scope, 84);
+    let mut bs = v8::ArrayBuffer::new_backing_store(scope, 84);
     assert_eq!(84, bs.byte_length());
     assert_eq!(false, bs.is_shared());
+    let bs = v8::SharedRef::<v8::BackingStore>::from(bs);
+    assert_eq!(84, bs.byte_length());
+    assert_eq!(true, bs.is_shared());
 
     let data: Box<[u8]> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].into_boxed_slice();
-    let mut bs =
-      unsafe { v8::ArrayBuffer::new_backing_store_from_boxed_slice(data) };
+    let mut bs = v8::SharedRef::<v8::BackingStore>::from(data);
     assert_eq!(10, bs.byte_length());
     assert_eq!(false, bs.is_shared());
     let ab = v8::ArrayBuffer::new_with_backing_store(scope, &mut bs);
     let mut bs = ab.get_backing_store();
     assert_eq!(10, ab.byte_length());
-    let data = bs.data_bytes();
+    let data = &mut *bs;
     assert_eq!(data[0], 0);
     assert_eq!(data[9], 9);
     context.exit();
