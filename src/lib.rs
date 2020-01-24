@@ -153,6 +153,7 @@ pub use promise::{PromiseRejectEvent, PromiseRejectMessage, PromiseState};
 pub use property_attribute::*;
 pub use scope::CallbackScope;
 pub use scope::ContextScope;
+pub use scope::Entered;
 pub use scope::FunctionCallbackScope;
 pub use scope::Locker;
 pub use scope::PropertyCallbackScope;

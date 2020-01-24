@@ -15,23 +15,169 @@ lazy_static! {
   static ref INIT_LOCK: Mutex<u32> = Mutex::new(0);
 }
 
-#[must_use]
-struct SetupGuard {}
+struct V8;
 
-impl Drop for SetupGuard {
-  fn drop(&mut self) {
-    // TODO shutdown process cleanly.
-  }
-}
-
-fn setup() -> SetupGuard {
+fn setup() -> V8 {
   let mut g = INIT_LOCK.lock().unwrap();
   *g += 1;
   if *g == 1 {
     v8::V8::initialize_platform(v8::new_default_platform());
     v8::V8::initialize();
   }
-  SetupGuard {}
+  V8
+}
+
+impl Drop for V8 {
+  fn drop(&mut self) {
+    // TODO shutdown process cleanly.
+  }
+}
+
+use std::any::type_name;
+use std::borrow::BorrowMut;
+use std::cell::Ref;
+use std::cell::RefCell;
+use std::cell::RefMut;
+use std::cell::UnsafeCell;
+use std::mem::ManuallyDrop;
+use std::ops::{Deref, DerefMut};
+
+struct SetupItem<T>(ManuallyDrop<UnsafeCell<Option<T>>>);
+
+impl<T> Default for SetupItem<T> {
+  fn default() -> Self {
+    Self(ManuallyDrop::new(UnsafeCell::new(None)))
+  }
+}
+
+struct Foo {}
+
+impl Drop for Foo {
+  fn drop(&mut self) {
+    eprintln!("Droppingg FOO");
+  }
+}
+
+struct Bar {}
+
+impl Drop for Bar {
+  fn drop(&mut self) {
+    eprintln!("Droppingg Bar");
+  }
+}
+
+#[allow(clippy::mut_from_ref)]
+impl<T> SetupItem<T> {
+  pub fn get(&self, init: impl FnOnce() -> T) -> &mut T {
+    let option = unsafe { &mut *self.0.get() };
+    if option.is_some() {
+      panic!("{} already borrowed", type_name::<T>());
+    }
+    let prev = option.replace(init());
+    assert!(prev.is_none());
+    option.as_mut().unwrap()
+  }
+}
+
+#[derive(Default)]
+struct SetupData<'s> {
+  v8: SetupItem<V8>,
+  isolate: SetupItem<v8::OwnedIsolate>,
+  locker: SetupItem<v8::Scope<'s, v8::Locker>>,
+  entered_locker: SetupItem<&'s mut v8::Entered<'s, v8::Locker>>,
+  handle_scope:
+    SetupItem<v8::Scope<'s, v8::HandleScope, v8::Entered<'s, v8::Locker>>>,
+  entered_handle_scope: SetupItem<
+    &'s mut v8::Entered<'s, v8::HandleScope, v8::Entered<'s, v8::Locker>>,
+  >,
+  context_scope: SetupItem<
+    v8::Scope<
+      's,
+      v8::ContextScope,
+      v8::Entered<'s, v8::HandleScope, v8::Entered<'s, v8::Locker>>,
+    >,
+  >,
+  entered_context_scope: SetupItem<
+    &'s mut v8::Entered<
+      's,
+      v8::ContextScope,
+      v8::Entered<'s, v8::HandleScope, v8::Entered<'s, v8::Locker>>,
+    >,
+  >,
+}
+
+#[derive(Default)]
+struct Setup<'s>(SetupData<'s>);
+
+impl<'s> Deref for Setup<'s> {
+  type Target = SetupData<'s>;
+  fn deref(&self) -> &Self::Target {
+    &self.0
+  }
+}
+
+#[allow(clippy::mut_from_ref)]
+impl<'s> SetupData<'s> {
+  pub fn v8(&'s self) -> &'s mut V8 {
+    self.v8.get(|| setup())
+  }
+  pub fn isolate(&'s self) -> &'s mut v8::OwnedIsolate {
+    self.isolate.get(|| {
+      self.v8();
+      let mut params = v8::Isolate::create_params();
+      params.set_array_buffer_allocator(v8::new_default_allocator());
+      v8::Isolate::new(params)
+    })
+  }
+  pub fn locker(&'s self) -> &'s mut v8::Scope<'s, v8::Locker> {
+    self.locker.get(|| v8::Locker::new(&**self.isolate()))
+  }
+
+  pub fn entered_locker(&'s self) -> &'s mut v8::Entered<'s, v8::Locker> {
+    self.entered_locker.get(|| self.locker().enter())
+  }
+
+  pub fn handle_scope(
+    &'s self,
+  ) -> &'s mut v8::Scope<'s, v8::HandleScope, v8::Entered<'s, v8::Locker>> {
+    self
+      .handle_scope
+      .get(|| v8::HandleScope::new(self.entered_locker()))
+  }
+
+  pub fn entered_handle_scope(
+    &'s self,
+  ) -> &'s mut v8::Entered<'s, v8::HandleScope, v8::Entered<'s, v8::Locker>> {
+    self
+      .entered_handle_scope
+      .get(|| self.handle_scope().enter())
+  }
+
+  pub fn context_scope(
+    &'s self,
+  ) -> &'s mut v8::Scope<
+    's,
+    v8::ContextScope,
+    v8::Entered<'s, v8::HandleScope, v8::Entered<'s, v8::Locker>>,
+  > {
+    self.context_scope.get(|| {
+      let scope = self.entered_handle_scope();
+      let context = v8::Context::new(scope);
+      v8::ContextScope::new(scope, context)
+    })
+  }
+
+  pub fn entered_context_scope(
+    &'s self,
+  ) -> &'s mut v8::Entered<
+    's,
+    v8::ContextScope,
+    v8::Entered<'s, v8::HandleScope, v8::Entered<'s, v8::Locker>>,
+  > {
+    self
+      .entered_context_scope
+      .get(|| self.context_scope().enter())
+  }
 }
 
 #[test]
@@ -253,17 +399,20 @@ fn microtasks() {
 
 #[test]
 fn array_buffer() {
-  let _setup_guard = setup();
-  let mut params = v8::Isolate::create_params();
-  params.set_array_buffer_allocator(v8::new_default_allocator());
-  let isolate = v8::Isolate::new(params);
-  let mut locker = v8::Locker::new(&isolate);
-  let scope = locker.enter();
+  let x = SetupData::default();
+
+  //let mut params = v8::Isolate::create_params();
+  //params.set_array_buffer_allocator(v8::new_default_allocator());
+  //let isolate = v8::Isolate::new(params);
+  //let mut locker = v8::Locker::new(&isolate);
+  //let scope = locker.enter();
+  //let mut hs = v8::HandleScope::new(scope);
+  //let scope = hs.enter();
+  //let context = v8::Context::new(scope);
+  //let mut cs = v8::ContextScope::new(scope, context);
+  // let scope = cs.enter();
   {
-    let mut hs = v8::HandleScope::new(scope);
-    let scope = hs.enter();
-    let context = v8::Context::new(scope);
-    let mut cs = v8::ContextScope::new(scope, context);
+    let cs = x.context_scope();
     let scope = cs.enter();
 
     let ab = v8::ArrayBuffer::new(scope, 42);
