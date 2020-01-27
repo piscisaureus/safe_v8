@@ -209,7 +209,7 @@ impl<'s> CallbackScope<Escapable> {
 }
 
 impl<X> CallbackScope<X> {
-  pub(crate) fn get_raw_isolate_(&self) -> *mut Isolate {
+  pub(crate) fn get_raw_isolate(&self) -> *mut Isolate {
     self.isolate
   }
 }

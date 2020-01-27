@@ -73,7 +73,7 @@ pub(crate) mod internal {
 
   impl<X> GetRawIsolate for CallbackScope<X> {
     fn get_raw_isolate(&self) -> *mut Isolate {
-      self.get_raw_isolate_()
+      self.get_raw_isolate()
     }
   }
 
@@ -147,6 +147,12 @@ where
     unsafe { &mut *(self.data().get_raw_isolate()) }
   }
 }
+
+//impl<'s, X> InIsolate for Entered<'s, CallbackScope<X>> {
+//  fn isolate(&mut self) -> &mut Isolate {
+//    unsafe { &mut *(self.get_raw_isolate()) }
+//  }
+//}
 
 pub trait InContext: InIsolate {}
 impl<'s> InContext for Entered<'s, FunctionCallbackInfo, ()> {}
