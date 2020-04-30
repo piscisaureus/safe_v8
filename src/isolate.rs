@@ -2,6 +2,7 @@
 use crate::isolate_create_params::raw;
 use crate::isolate_create_params::CreateParams;
 use crate::promise::PromiseRejectMessage;
+use crate::scope2::ScopeStore;
 use crate::support::Opaque;
 use crate::Context;
 use crate::Function;
@@ -255,6 +256,10 @@ impl Isolate {
       .is_none()
   }
 
+  pub(crate) fn get_scopes(&self) -> &ScopeStore {
+    &self.get_annex().scopes
+  }
+
   /// Sets this isolate as the entered one for the current thread.
   /// Saves the previously entered one (if any), so that it can be
   /// restored when exiting.  Re-entering an isolate is allowed.
@@ -410,6 +415,7 @@ impl Isolate {
 pub(crate) struct IsolateAnnex {
   create_param_allocations: Box<dyn Any>,
   slots: HashMap<TypeId, RefCell<Box<dyn Any>>>,
+  scopes: ScopeStore,
   // The `isolate` and `isolate_mutex` fields are there so an `IsolateHandle`
   // (which may outlive the isolate itself) can determine whether the isolate is
   // still alive, and if so, get a reference to it. Safety rules:
@@ -429,6 +435,7 @@ impl IsolateAnnex {
     Self {
       create_param_allocations,
       slots: HashMap::new(),
+      scopes: ScopeStore::new(isolate),
       isolate,
       isolate_mutex: Mutex::new(()),
     }

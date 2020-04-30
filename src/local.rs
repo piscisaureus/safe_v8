@@ -59,7 +59,11 @@ impl<'sc, T> Local<'sc, T> {
   }
 
   pub(crate) unsafe fn from_raw(ptr: *const T) -> Option<Self> {
-    Some(Self(NonNull::new(ptr as *mut _)?, PhantomData))
+    Some(Self::from_raw_non_null(NonNull::new(ptr as *mut _)?))
+  }
+
+  pub(crate) unsafe fn from_raw_non_null(nn: NonNull<T>) -> Self {
+    Self(nn, PhantomData)
   }
 
   pub(crate) fn as_non_null(self) -> NonNull<T> {
