@@ -1,9 +1,9 @@
 // Copyright 2019-2020 the Deno authors. All rights reserved. MIT license.
 //! For compiling scripts.
-use crate::InIsolate;
 use crate::Isolate;
 use crate::Local;
 use crate::Module;
+use crate::Scope;
 use crate::ScriptOrigin;
 use crate::String;
 use std::mem::MaybeUninit;
@@ -78,7 +78,7 @@ pub enum NoCacheReason {
 /// Corresponds to the ParseModule abstract operation in the ECMAScript
 /// specification.
 pub fn compile_module<'a>(
-  scope: &mut impl InIsolate,
+  scope: &mut Scope,
   source: Source,
 ) -> Option<Local<'a, Module>> {
   compile_module2(
@@ -91,7 +91,7 @@ pub fn compile_module<'a>(
 
 /// Same as compile_module with more options.
 pub fn compile_module2<'a>(
-  scope: &mut impl InIsolate,
+  scope: &mut Scope,
   mut source: Source,
   options: CompileOptions,
   no_cache_reason: NoCacheReason,

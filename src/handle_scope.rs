@@ -5,8 +5,8 @@ use crate::scope::Scope;
 use crate::scope::ScopeDefinition;
 use crate::scope_traits::ToLocalOrReturnsLocal;
 use crate::Data;
-use crate::InIsolate;
 use crate::Local;
+use crate::Scope;
 
 extern "C" {
   fn v8__HandleScope__CONSTRUCT(buf: *mut HandleScope, isolate: *mut Isolate);

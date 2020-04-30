@@ -5,11 +5,11 @@ use std::mem::take;
 use std::mem::MaybeUninit;
 
 use crate::Context;
-use crate::InIsolate;
+use crate::HandleScope;
 use crate::Isolate;
 use crate::Local;
 use crate::Message;
-use crate::ToLocal;
+use crate::Scope;
 use crate::Value;
 
 extern "C" {
@@ -72,7 +72,7 @@ impl<'tc> TryCatch<'tc> {
   /// stack allocated because the memory location itself is compared against
   /// JavaScript try/catch blocks.
   #[allow(clippy::new_ret_no_self)]
-  pub fn new(scope: &mut impl InIsolate) -> TryCatchScope<'tc> {
+  pub fn new(scope: &mut Scope) -> TryCatchScope<'tc> {
     TryCatchScope(TryCatchState::New {
       isolate: scope.isolate(),
     })
@@ -119,7 +119,7 @@ impl<'tc> TryCatch<'tc> {
   /// property is present an empty handle is returned.
   pub fn stack_trace<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     context: Local<Context>,
   ) -> Option<Local<'sc, Value>> {
     unsafe { scope.to_local(v8__TryCatch__StackTrace(&self.0, &*context)) }

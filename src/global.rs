@@ -2,11 +2,11 @@ use std::mem::transmute;
 use std::ptr::NonNull;
 
 use crate::Data;
-use crate::InIsolate;
+use crate::HandleScope;
 use crate::Isolate;
 use crate::IsolateHandle;
 use crate::Local;
-use crate::ToLocal;
+use crate::Scope;
 
 extern "C" {
   fn v8__Local__New(isolate: *mut Isolate, other: *const Data) -> *const Data;
@@ -50,10 +50,7 @@ impl<T> Global<T> {
   /// Construct a new Global from an existing handle. When the existing handle
   /// is non-empty, a new storage cell is created pointing to the same object,
   /// and no flags are set.
-  pub fn new_from(
-    scope: &mut impl InIsolate,
-    other: impl AnyHandle<T>,
-  ) -> Self {
+  pub fn new_from(scope: &mut Scope, other: impl AnyHandle<T>) -> Self {
     let isolate = scope.isolate();
     let other_value = other.read(isolate);
     Self {
@@ -72,7 +69,7 @@ impl<T> Global<T> {
   /// Construct a Local<T> from this global handle.
   pub fn get<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Option<Local<'sc, T>> {
     let isolate = scope.isolate();
     self.check_isolate(isolate);
@@ -85,7 +82,7 @@ impl<T> Global<T> {
 
   /// If non-empty, destroy the underlying storage cell
   /// and create a new one with the contents of other if other is non empty.
-  pub fn set(&mut self, scope: &mut impl InIsolate, other: impl AnyHandle<T>) {
+  pub fn set(&mut self, scope: &mut Scope, other: impl AnyHandle<T>) {
     let isolate = scope.isolate();
     self.check_isolate(isolate);
     let other_value = other.read(isolate);
@@ -109,7 +106,7 @@ impl<T> Global<T> {
 
   /// If non-empty, destroy the underlying storage cell
   /// IsEmpty() will return true after this call.
-  pub fn reset(&mut self, scope: &mut impl InIsolate) {
+  pub fn reset(&mut self, scope: &mut Scope) {
     self.set(scope, None);
   }
 

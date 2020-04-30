@@ -8,11 +8,11 @@ use crate::support::SharedRef;
 use crate::support::UniqueRef;
 use crate::BackingStore;
 use crate::BackingStoreDeleterCallback;
-use crate::InIsolate;
+use crate::HandleScope;
 use crate::Isolate;
 use crate::Local;
+use crate::Scope;
 use crate::SharedArrayBuffer;
-use crate::ToLocal;
 
 extern "C" {
   fn v8__SharedArrayBuffer__New__with_byte_length(
@@ -46,7 +46,7 @@ impl SharedArrayBuffer {
   /// will be deallocated when it is garbage-collected,
   /// unless the object is externalized.
   pub fn new<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     byte_length: usize,
   ) -> Option<Local<'sc, SharedArrayBuffer>> {
     unsafe {
@@ -58,7 +58,7 @@ impl SharedArrayBuffer {
   }
 
   pub fn with_backing_store<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     backing_store: &SharedRef<BackingStore>,
   ) -> Local<'sc, SharedArrayBuffer> {
     let isolate = scope.isolate();
@@ -89,7 +89,7 @@ impl SharedArrayBuffer {
   /// given isolate and re-try the allocation. If GCs do not help, then the
   /// function will crash with an out-of-memory error.
   pub fn new_backing_store(
-    scope: &mut impl InIsolate,
+    scope: &mut Scope,
     byte_length: usize,
   ) -> UniqueRef<BackingStore> {
     unsafe {

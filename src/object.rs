@@ -5,12 +5,12 @@ use crate::support::MaybeBool;
 use crate::AccessorNameGetterCallback;
 use crate::Array;
 use crate::Context;
+use crate::HandleScope;
 use crate::Local;
 use crate::Map;
 use crate::Name;
 use crate::Object;
 use crate::PropertyAttribute;
-use crate::ToLocal;
 use crate::Value;
 
 extern "C" {
@@ -85,7 +85,7 @@ extern "C" {
 
 impl Object {
   /// Creates an empty object.
-  pub fn new<'sc>(scope: &mut impl ToLocal<'sc>) -> Local<'sc, Object> {
+  pub fn new<'sc>(scope: &mut HandleScope<'sc>) -> Local<'sc, Object> {
     let ptr = unsafe { v8__Object__New(scope.isolate()) };
     unsafe { scope.to_local(ptr) }.unwrap()
   }
@@ -97,7 +97,7 @@ impl Object {
   /// All properties will be created as enumerable, configurable
   /// and writable properties.
   pub fn with_prototype_and_properties<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     prototype_or_null: Local<'sc, Value>,
     names: &[Local<Name>],
     values: &[Local<Value>],
@@ -187,7 +187,7 @@ impl Object {
 
   pub fn get<'a>(
     &self,
-    scope: &mut impl ToLocal<'a>,
+    scope: &mut HandleScope<'a>,
     context: Local<Context>,
     key: Local<Value>,
   ) -> Option<Local<'a, Value>> {
@@ -199,7 +199,7 @@ impl Object {
 
   pub fn get_index<'a>(
     &self,
-    scope: &mut impl ToLocal<'a>,
+    scope: &mut HandleScope<'a>,
     context: Local<Context>,
     index: u32,
   ) -> Option<Local<'a, Value>> {
@@ -213,7 +213,7 @@ impl Object {
   /// skipped by proto and it does not consult the security handler.
   pub fn get_prototype<'a>(
     &self,
-    scope: &mut impl ToLocal<'a>,
+    scope: &mut HandleScope<'a>,
   ) -> Option<Local<'a, Value>> {
     unsafe {
       let ptr = v8__Object__GetPrototype(self);
@@ -246,7 +246,7 @@ impl Object {
   /// Returns the context in which the object was created.
   pub fn creation_context<'a>(
     &self,
-    scope: &mut impl ToLocal<'a>,
+    scope: &mut HandleScope<'a>,
   ) -> Local<'a, Context> {
     unsafe {
       let ptr = v8__Object__CreationContext(self);
@@ -259,7 +259,7 @@ impl Array {
   /// Creates a JavaScript array with the given length. If the length
   /// is negative the returned array will have length 0.
   pub fn new<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     length: i32,
   ) -> Local<'sc, Array> {
     let ptr = unsafe { v8__Array__New(scope.isolate(), length) };
@@ -268,7 +268,7 @@ impl Array {
 
   /// Creates a JavaScript array out of a Local<Value> array with a known length.
   pub fn new_with_elements<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     elements: &[Local<Value>],
   ) -> Local<'sc, Array> {
     if elements.is_empty() {
@@ -298,7 +298,7 @@ impl Map {
   /// index N + 1 is the Nth value.
   pub fn as_array<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Local<'sc, Array> {
     let ptr = unsafe { v8__Map__As__Array(self) };
     unsafe { scope.to_local(ptr) }.unwrap()

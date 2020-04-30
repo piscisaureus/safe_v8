@@ -3,10 +3,10 @@ use std::marker::PhantomData;
 use crate::support::MaybeBool;
 use crate::Context;
 use crate::Function;
+use crate::HandleScope;
 use crate::Local;
 use crate::Promise;
 use crate::PromiseResolver;
-use crate::ToLocal;
 use crate::Value;
 
 extern "C" {
@@ -79,10 +79,7 @@ impl Promise {
 
   /// Returns the content of the [[PromiseResult]] field. The Promise must not
   /// be pending.
-  pub fn result<'sc>(
-    &self,
-    scope: &mut impl ToLocal<'sc>,
-  ) -> Local<'sc, Value> {
+  pub fn result<'sc>(&self, scope: &mut HandleScope<'sc>) -> Local<'sc, Value> {
     unsafe { scope.to_local(v8__Promise__Result(&*self)) }.unwrap()
   }
 
@@ -132,7 +129,7 @@ impl Promise {
 impl PromiseResolver {
   /// Create a new resolver, along with an associated promise in pending state.
   pub fn new<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     context: Local<'sc, Context>,
   ) -> Option<Local<'sc, PromiseResolver>> {
     unsafe { scope.to_local(v8__Promise__Resolver__New(&*context)) }
@@ -141,7 +138,7 @@ impl PromiseResolver {
   /// Extract the associated promise.
   pub fn get_promise<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Local<'sc, Promise> {
     unsafe { scope.to_local(v8__Promise__Resolver__GetPromise(&*self)) }
       .unwrap()

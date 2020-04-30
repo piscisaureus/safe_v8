@@ -3,12 +3,12 @@
 use crate::isolate::Isolate;
 use crate::support::int;
 use crate::Context;
+use crate::HandleScope;
 use crate::Local;
 use crate::Message;
 use crate::StackFrame;
 use crate::StackTrace;
 use crate::String;
-use crate::ToLocal;
 use crate::Value;
 
 extern "C" {
@@ -75,7 +75,7 @@ impl StackTrace {
   /// Returns a StackFrame at a particular index.
   pub fn get_frame<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     index: usize,
   ) -> Option<Local<'sc, StackFrame>> {
     let isolate = scope.isolate();
@@ -115,7 +115,7 @@ impl StackFrame {
   /// function for this StackFrame.
   pub fn get_script_name<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Option<Local<'sc, String>> {
     unsafe { scope.to_local(v8__StackFrame__GetScriptName(self)) }
   }
@@ -126,7 +126,7 @@ impl StackFrame {
   /// deprecated //@ sourceURL=... string.
   pub fn get_script_name_or_source_url<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Option<Local<'sc, String>> {
     unsafe { scope.to_local(v8__StackFrame__GetScriptNameOrSourceURL(self)) }
   }
@@ -134,7 +134,7 @@ impl StackFrame {
   /// Returns the name of the function associated with this stack frame.
   pub fn get_function_name<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Option<Local<'sc, String>> {
     unsafe { scope.to_local(v8__StackFrame__GetFunctionName(self)) }
   }
@@ -163,7 +163,7 @@ impl StackFrame {
 }
 
 impl Message {
-  pub fn get<'sc>(&self, scope: &mut impl ToLocal<'sc>) -> Local<'sc, String> {
+  pub fn get<'sc>(&self, scope: &mut HandleScope<'sc>) -> Local<'sc, String> {
     unsafe { scope.to_local(v8__Message__Get(self)) }.unwrap()
   }
 
@@ -172,14 +172,14 @@ impl Message {
   /// to change this option.
   pub fn get_stack_trace<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Option<Local<'sc, StackTrace>> {
     unsafe { scope.to_local(v8__Message__GetStackTrace(self)) }
   }
 
   pub fn get_source_line<'s>(
     &self,
-    scope: &mut impl ToLocal<'s>,
+    scope: &mut HandleScope<'s>,
     context: Local<Context>,
   ) -> Option<Local<'s, String>> {
     unsafe { scope.to_local(v8__Message__GetSourceLine(self, &*context)) }
@@ -189,7 +189,7 @@ impl Message {
   /// the error originates.
   pub fn get_script_resource_name<'s>(
     &self,
-    scope: &mut impl ToLocal<'s>,
+    scope: &mut HandleScope<'s>,
   ) -> Option<Local<'s, Value>> {
     unsafe { scope.to_local(v8__Message__GetScriptResourceName(self)) }
   }
@@ -256,7 +256,7 @@ pub struct Exception;
 
 impl Exception {
   pub fn error<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     message: Local<String>,
   ) -> Local<'sc, Value> {
     let isolate = scope.isolate();
@@ -267,7 +267,7 @@ impl Exception {
   }
 
   pub fn range_error<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     message: Local<String>,
   ) -> Local<'sc, Value> {
     let isolate = scope.isolate();
@@ -278,7 +278,7 @@ impl Exception {
   }
 
   pub fn reference_error<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     message: Local<String>,
   ) -> Local<'sc, Value> {
     let isolate = scope.isolate();
@@ -289,7 +289,7 @@ impl Exception {
   }
 
   pub fn syntax_error<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     message: Local<String>,
   ) -> Local<'sc, Value> {
     let isolate = scope.isolate();
@@ -300,7 +300,7 @@ impl Exception {
   }
 
   pub fn type_error<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     message: Local<String>,
   ) -> Local<'sc, Value> {
     let isolate = scope.isolate();
@@ -314,7 +314,7 @@ impl Exception {
   /// Will try to reconstruct the original stack trace from the exception value,
   /// or capture the current stack trace if not available.
   pub fn create_message<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     exception: Local<Value>,
   ) -> Local<'sc, Message> {
     let isolate = scope.isolate();
@@ -325,7 +325,7 @@ impl Exception {
   /// Returns the original stack trace that was captured at the creation time
   /// of a given exception, or an empty handle if not available.
   pub fn get_stack_trace<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     exception: Local<Value>,
   ) -> Option<Local<'sc, StackTrace>> {
     unsafe { scope.to_local(v8__Exception__GetStackTrace(&*exception)) }

@@ -9,11 +9,11 @@ use std::ptr::NonNull;
 use crate::scope_traits::internal::GetRawIsolate;
 use crate::Context;
 use crate::FunctionCallbackInfo;
-use crate::InIsolate;
 use crate::Isolate;
 use crate::Local;
 use crate::PromiseRejectMessage;
 use crate::PropertyCallbackInfo;
+use crate::Scope;
 
 // Note: the 's lifetime is there to ensure that after entering a scope once,
 // the same scope object can't ever be entered again.
@@ -172,7 +172,7 @@ impl<'s, S, P> Entered<'s, S, P> {
 ///
 /// Using a CallbackScope in any other situation is unsafe.
 /// Also note that CallbackScope should not be used for function and property
-/// accessor callbacks; use FunctionCallbackScope and PropertyCallbackScope
+/// accessor callbacks; use Scope and Scope
 /// instead.
 ///
 /// A CallbackScope can be created from the following inputs:
@@ -288,5 +288,5 @@ impl Drop for ContextScope {
   }
 }
 
-pub type FunctionCallbackScope<'s> = &'s mut Entered<'s, FunctionCallbackInfo>;
-pub type PropertyCallbackScope<'s> = &'s mut Entered<'s, PropertyCallbackInfo>;
+pub type Scope<'s> = &'s mut Entered<'s, FunctionCallbackInfo>;
+pub type Scope<'s> = &'s mut Entered<'s, PropertyCallbackInfo>;

@@ -12,12 +12,12 @@ use std::ptr;
 use std::ptr::drop_in_place;
 use std::ptr::NonNull;
 
+use crate::get_isolate::GetRawIsolate;
 use crate::Context;
 use crate::Data;
 use crate::Isolate;
 use crate::Local;
 use crate::Message;
-use crate::OwnedIsolate;
 use crate::Primitive;
 use crate::Value;
 pub(crate) use internal::ScopeStore;
@@ -65,11 +65,18 @@ impl<'a, Scope: ScopeParams> DerefMut for Ref<'a, Scope> {
   }
 }
 
+#[derive(Debug)]
 pub struct Scope<Handles = No, Escape = No, TryCatch = No> {
   store: *const ScopeStore,
   cookie: ScopeCookie,
   frame_count: u32,
   _phantom: PhantomData<(Handles, Escape, TryCatch)>,
+}
+
+impl<Handles, Escape, TryCatch> Drop for Scope<Handles, Escape, TryCatch> {
+  fn drop(&mut self) {
+    println!("Drop Scope");
+  }
 }
 
 impl<'t, Handles, Escape> Deref for Scope<Handles, Escape, Yes<'t>> {
@@ -87,7 +94,7 @@ impl<'t, Handles, Escape> DerefMut for Scope<Handles, Escape, Yes<'t>> {
   }
 }
 
-impl<'h, 'e> Deref for Scope<Yes<'h>, Yes<'e>, No> {
+impl<'h, 'e: 'h> Deref for Scope<Yes<'h>, Yes<'e>, No> {
   type Target = Scope<Yes<'h>, No, No>;
   #[inline(always)]
   fn deref(&self) -> &Self::Target {
@@ -95,7 +102,7 @@ impl<'h, 'e> Deref for Scope<Yes<'h>, Yes<'e>, No> {
   }
 }
 
-impl<'h, 'e> DerefMut for Scope<Yes<'h>, Yes<'e>, No> {
+impl<'h, 'e: 'h> DerefMut for Scope<Yes<'h>, Yes<'e>, No> {
   #[inline(always)]
   fn deref_mut(&mut self) -> &mut Self::Target {
     unsafe { Self::Target::cast_mut(self) }
@@ -117,6 +124,24 @@ impl<'h> DerefMut for Scope<Yes<'h>, No, No> {
   }
 }
 
+impl Deref for Scope<No, No, No> {
+  type Target = Isolate;
+  #[inline(always)]
+  fn deref(&self) -> &Self::Target {
+    let p = self as *const Self;
+    let p = p as *mut Self;
+    let p = unsafe { &mut *p };
+    p.isolate()
+  }
+}
+
+impl DerefMut for Scope<No, No, No> {
+  #[inline(always)]
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    self.isolate()
+  }
+}
+
 impl<Handles, Escape, TryCatch> Scope<Handles, Escape, TryCatch> {
   #[inline(always)]
   unsafe fn cast<Handles_, Escape_, TryCatch_>(
@@ -126,30 +151,33 @@ impl<Handles, Escape, TryCatch> Scope<Handles, Escape, TryCatch> {
   }
 
   #[inline(always)]
-  unsafe fn cast_mut<Handles_, Escape_, TryCatch_>(
+  pub(crate) unsafe fn cast_mut<Handles_, Escape_, TryCatch_>(
     from: &mut Scope<Handles_, Escape_, TryCatch_>,
   ) -> &mut Self {
     &mut *(from as *mut _ as *mut Self)
   }
 }
 
-impl Scope<No, No, No> {
+impl Scope {
   #[inline(always)]
-  pub fn enter_isolate(isolate: &OwnedIsolate) -> Ref<Self> {
-    let scope_store = isolate.get_scopes();
-    ScopeStore::new_scope_with(scope_store, |s| {
-      s.assert_same_isolate(isolate);
+  pub(crate) fn root(scope_store: &'_ ScopeStore) -> Self {
+    ScopeStore::new_root_scope_with(scope_store, |_| ())
+  }
+
+  #[inline(always)]
+  pub(crate) fn drop_root(&mut self) {
+    ScopeStore::drop_scope(self);
+  }
+
+  #[inline(always)]
+  pub fn isolate_scope<'a>(isolate: &'_ Isolate) -> Ref<'a, Self> {
+    ScopeStore::new_scope_with(isolate.get_scopes(), |s| {
       s.push::<data::Context>(None);
     })
   }
 }
 
 impl<Handles, Escape, TryCatch> Scope<Handles, Escape, TryCatch> {
-  #[inline(always)]
-  pub(super) fn get_store<'a>(&'_ self) -> &'a ScopeStore {
-    unsafe { &*self.store }
-  }
-
   #[inline(always)]
   pub fn context_scope<'a>(
     parent: &'a mut Scope<Handles, Escape, TryCatch>,
@@ -167,28 +195,9 @@ impl<Handles, Escape, TryCatch> Scope<Handles, Escape, TryCatch> {
     let isolate_ptr = ScopeStore::with_mut(self, |s| s.get_isolate_ptr());
     unsafe { &mut *isolate_ptr }
   }
-}
-
-impl<'h, Escape, TryCatch> Scope<Yes<'h>, Escape, TryCatch> {
-  #[inline(always)]
-  pub fn handle_scope<'a, Handles_>(
-    parent: &'a mut Scope<Handles_, Escape, TryCatch>,
-  ) -> Ref<'a, Self> {
-    ScopeStore::new_inner_scope_with(parent, |s| {
-      s.push::<data::HandleScope>(());
-    })
-  }
 
   #[inline(always)]
-  #[allow(clippy::wrong_self_convention)]
-  pub fn to_local<T>(&'_ mut self, ptr: *const T) -> Option<Local<'h, T>> {
-    // Do not remove. This access verifies that `self` is the topmost scope.
-    let _: data::HandleScope = ScopeStore::get_data(self);
-    unsafe { Local::from_raw(ptr) }
-  }
-
-  #[inline(always)]
-  pub fn context(&'_ mut self) -> Local<'h, Context> {
+  pub fn context(&mut self) -> &Context {
     let context_data: data::Context = ScopeStore::get_data(self);
     let context_nn = match context_data {
       data::Context::CurrentCached(maybe_nn) => {
@@ -197,7 +206,52 @@ impl<'h, Escape, TryCatch> Scope<Yes<'h>, Escape, TryCatch> {
       data::Context::Entered(nn) => nn,
       _ => unreachable!(),
     };
-    unsafe { Local::from_raw_non_null(context_nn) }
+    unsafe { &*context_nn.as_ptr() }
+  }
+
+  #[inline(always)]
+  pub(super) fn get_store<'a>(&'_ self) -> &'a ScopeStore {
+    unsafe { &*self.store }
+  }
+}
+
+impl<'h, Escape, TryCatch> Scope<Yes<'h>, Escape, TryCatch> {
+  #[inline(always)]
+  pub fn handle_scope<'a, Handles_>(
+    parent: &'a mut Scope<Handles_, Escape, TryCatch>,
+  ) -> Ref<'h, Self> {
+    ScopeStore::new_inner_scope_with(parent, |s| {
+      s.push::<data::HandleScope>(());
+    })
+  }
+
+  #[inline(always)]
+  #[allow(clippy::wrong_self_convention)]
+  pub unsafe fn to_local<'a, T>(
+    &'_ mut self,
+    ptr: *const T,
+  ) -> Option<Local<'a, T>>
+  where
+    'h: 'a,
+  {
+    // Do not remove. This access verifies that `self` is the topmost scope.
+    let _: data::HandleScope = ScopeStore::get_data(self);
+    Local::from_raw(ptr)
+  }
+
+  pub fn get_current_context(&mut self) -> Option<Local<'h, Context>> {
+    let isolate = self.isolate();
+    let context_ptr = unsafe { raw::v8__Isolate__GetCurrentContext(isolate) };
+    unsafe { self.to_local(context_ptr) }
+  }
+
+  pub fn get_entered_or_microtask_context(
+    &mut self,
+  ) -> Option<Local<'h, Context>> {
+    let isolate = self.isolate();
+    let context_ptr =
+      unsafe { raw::v8__Isolate__GetEnteredOrMicrotaskContext(isolate) };
+    unsafe { self.to_local(context_ptr) }
   }
 }
 
@@ -339,9 +393,9 @@ impl<'h, 't, Escape> Scope<Yes<'h>, Escape, Yes<'t>> {
   /// property is present an empty handle is returned.
   #[inline(always)]
   pub fn stack_trace(&'_ mut self) -> Option<Local<'h, Value>> {
-    let context = self.context();
     let data: data::TryCatch = ScopeStore::get_data(self);
-    unsafe { Local::from_raw(raw::v8__TryCatch__StackTrace(&*data, &*context)) }
+    let context = self.context();
+    unsafe { Local::from_raw(raw::v8__TryCatch__StackTrace(&*data, context)) }
   }
 
   /// Throws the exception caught by this TryCatch in a way that avoids
@@ -413,10 +467,49 @@ impl ContextScope {
   }
 }
 
+// TODO: Remove me. Temporarily added for compatibility with the old API.
+impl Scope {
+  #[inline(always)]
+  pub fn for_callback<'a>(
+    bearer: &impl GetRawIsolate,
+  ) -> Ref<'a, Scope<No, No, No>> {
+    let isolate = bearer.get_raw_isolate();
+    let isolate = unsafe { &*isolate };
+    let scope_store = isolate.get_scopes();
+    ScopeStore::new_scope_with(scope_store, |s| {
+      s.assert_same_isolate(isolate);
+      s.push::<data::Context>(None);
+    })
+  }
+
+  #[inline(always)]
+  pub fn for_callback_with_handle_scope<'a>(
+    bearer: &impl GetRawIsolate,
+  ) -> Ref<'a, Scope<Yes<'a>, No, No>> {
+    let isolate = bearer.get_raw_isolate();
+    let isolate = unsafe { &*isolate };
+    let scope_store = isolate.get_scopes();
+    ScopeStore::new_scope_with(scope_store, |s| {
+      s.assert_same_isolate(isolate);
+      s.push::<data::Context>(None);
+    })
+  }
+
+  #[inline(always)]
+  pub(crate) fn for_function_or_property_callback<'a, I: GetRawIsolate>(
+    info: *const I,
+  ) -> Ref<'a, Scope<Yes<'a>, No, No>> {
+    let info = unsafe { &*info };
+    Self::for_callback_with_handle_scope(info)
+  }
+}
+
 mod params {
   use super::*;
 
+  #[derive(Debug)]
   pub struct Yes<'t>(PhantomData<&'t ()>);
+  #[derive(Debug)]
   pub struct No;
 
   pub trait ScopeParams: Sized {
@@ -451,7 +544,7 @@ mod params {
 mod data {
   use super::*;
 
-  #[derive(Clone, Copy)]
+  #[derive(Clone, Copy, Debug)]
   pub(super) enum Context {
     Current,
     CurrentCached(Option<NonNull<super::Context>>),
@@ -512,7 +605,7 @@ mod data {
     }
   }
 
-  #[derive(Clone, Copy, Default)]
+  #[derive(Clone, Copy, Debug, Default)]
   pub(super) struct HandleScope(Option<NonNull<raw::HandleScope>>);
 
   impl ScopeData for HandleScope {
@@ -552,7 +645,7 @@ mod data {
     }
   }
 
-  #[derive(Clone, Copy, Default)]
+  #[derive(Clone, Copy, Debug, Default)]
   pub(super) struct EscapeSlot(Option<NonNull<raw::Address>>);
 
   impl ScopeData for EscapeSlot {
@@ -598,7 +691,7 @@ mod data {
     }
   }
 
-  #[derive(Clone, Copy, Default)]
+  #[derive(Clone, Copy, Debug, Default)]
   pub(super) struct TryCatch(Option<NonNull<raw::TryCatch>>);
 
   impl ScopeData for TryCatch {
@@ -674,6 +767,7 @@ mod internal {
     }
   }
 
+  #[derive(Debug)]
   pub(crate) struct ScopeStore {
     top_scope_cookie: Cell<ScopeCookie>,
     inner: ScopeStoreInner,
@@ -763,13 +857,24 @@ mod internal {
 
     #[inline(always)]
     pub(super) fn new_inner_scope_with<'a, Scope: ScopeInit>(
-      parent: &mut impl ScopeParams,
+      parent: &'_ mut impl ScopeParams,
       f: impl Fn(&mut ScopeStoreInner),
     ) -> Ref<'a, Scope> {
       let parent = parent.as_scope_mut();
       let store = parent.get_store();
       assert_eq!(parent.cookie, store.top_scope_cookie.get());
       store.new_scope_with(f)
+    }
+
+    #[inline(always)]
+    pub(super) fn new_root_scope_with<Scope: ScopeInit>(
+      &self,
+      f: impl Fn(&mut ScopeStoreInner),
+    ) -> Scope {
+      assert_eq!(ScopeCookie::NONE, self.top_scope_cookie.get());
+      let mut scope = Scope::new_with_store(self);
+      self.init_scope_with(&mut scope, f);
+      scope
     }
 
     #[inline(always)]
@@ -796,6 +901,7 @@ mod internal {
     }
   }
 
+  #[derive(Debug)]
   pub(super) struct ScopeStoreInner {
     isolate: *mut Isolate,
     active_scope_data: ActiveScopeData,
@@ -1008,7 +1114,7 @@ mod internal {
     ) -> &'a mut Self;
   }
 
-  #[derive(Default)]
+  #[derive(Debug, Default)]
   pub(super) struct ActiveScopeData {
     pub context: data::Context,
     pub handle_scope: data::HandleScope,
@@ -1105,6 +1211,9 @@ mod raw {
     pub fn v8__Isolate__GetCurrentContext(
       isolate: *mut Isolate,
     ) -> *const Context;
+    pub fn v8__Isolate__GetEnteredOrMicrotaskContext(
+      isolate: *mut Isolate,
+    ) -> *const Context;
 
     pub fn v8__HandleScope__CONSTRUCT(
       buf: *mut MaybeUninit<HandleScope>,
@@ -1147,15 +1256,14 @@ mod raw_unused {
   pub struct EscapableHandleScope([usize; 4]);
 
   extern "C" {
-    fn v8__Isolate__GetEnteredOrMicrotaskContext(
-      isolate: *mut Isolate,
-    ) -> *const Context;
-
     fn v8__EscapableHandleScope__CONSTRUCT(
       buf: *mut MaybeUninit<EscapableHandleScope>,
       isolate: *mut Isolate,
     );
     fn v8__EscapableHandleScope__DESTRUCT(this: *mut EscapableHandleScope);
+    fn v8__EscapableHandleScope__GetIsolate(
+      this: &EscapableHandleScope,
+    ) -> *mut Isolate;
     fn v8__EscapableHandleScope__Escape(
       this: *mut EscapableHandleScope,
       value: *const Data,

@@ -1,10 +1,10 @@
 // Copyright 2019-2020 the Deno authors. All rights reserved. MIT license.
 use crate::isolate::Isolate;
 use crate::Context;
+use crate::HandleScope;
 use crate::Local;
 use crate::Object;
 use crate::ObjectTemplate;
-use crate::ToLocal;
 use crate::Value;
 use std::ptr::null;
 
@@ -21,7 +21,7 @@ extern "C" {
 
 impl Context {
   /// Creates a new context.
-  pub fn new<'sc>(scope: &mut impl ToLocal<'sc>) -> Local<'sc, Context> {
+  pub fn new<'sc>(scope: &mut HandleScope<'sc>) -> Local<'sc, Context> {
     // TODO: optional arguments;
     let ptr = unsafe { v8__Context__New(scope.isolate(), null(), null()) };
     unsafe { scope.to_local(ptr) }.unwrap()
@@ -30,7 +30,7 @@ impl Context {
   /// Creates a new context using the object template as the template for
   /// the global object.
   pub fn new_from_template<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     templ: Local<ObjectTemplate>,
   ) -> Local<'sc, Context> {
     let ptr = unsafe { v8__Context__New(scope.isolate(), &*templ, null()) };
@@ -49,7 +49,7 @@ impl Context {
   /// proxy object.
   pub fn global<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Local<'sc, Object> {
     unsafe { scope.to_local(v8__Context__Global(self)) }.unwrap()
   }

@@ -13,7 +13,6 @@
 //! https://github.com/nodejs/node/tree/v13.7.0/src/inspector
 //! https://github.com/denoland/deno/blob/v0.38.0/cli/inspector.rs
 
-use crate::scope_traits::InIsolate;
 use crate::support::int;
 use crate::support::CxxVTable;
 use crate::support::FieldOffset;
@@ -24,6 +23,7 @@ use crate::support::UniqueRef;
 use crate::Context;
 use crate::Isolate;
 use crate::Local;
+use crate::Scope;
 
 extern "C" {
   fn v8_inspector__V8Inspector__Channel__BASE__CONSTRUCT(
@@ -833,16 +833,13 @@ fn string_view_display() {
 pub struct V8Inspector(Opaque);
 
 impl V8Inspector {
-  pub fn create<T>(
-    isolate: &mut impl InIsolate,
-    client: &mut T,
-  ) -> UniqueRef<V8Inspector>
+  pub fn create<T>(scope: &mut Scope, client: &mut T) -> UniqueRef<V8Inspector>
   where
     T: AsV8InspectorClient,
   {
     unsafe {
       UniqueRef::from_raw(v8_inspector__V8Inspector__create(
-        isolate.isolate(),
+        scope.isolate(),
         client.as_client_mut(),
       ))
     }

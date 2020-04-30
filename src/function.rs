@@ -1,7 +1,6 @@
 use std::convert::TryFrom;
 use std::marker::PhantomData;
 
-use crate::scope::ScopeDefinition;
 use crate::support::MapFnFrom;
 use crate::support::MapFnTo;
 use crate::support::ToCFn;
@@ -9,12 +8,11 @@ use crate::support::UnitType;
 use crate::support::{int, Opaque};
 use crate::Context;
 use crate::Function;
-use crate::FunctionCallbackScope;
+use crate::HandleScope;
 use crate::Local;
 use crate::Name;
 use crate::Object;
-use crate::PropertyCallbackScope;
-use crate::ToLocal;
+use crate::Scope;
 use crate::Value;
 
 extern "C" {
@@ -94,7 +92,7 @@ impl<'cb> ReturnValue<'cb> {
   /// value.
   pub fn get<'sc>(
     &mut self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Local<'sc, Value> {
     unsafe { scope.to_local(v8__ReturnValue__Get(self)) }.unwrap()
   }
@@ -113,11 +111,6 @@ pub struct FunctionCallbackInfo {
   length: int,
 }
 
-unsafe impl<'s> ScopeDefinition<'s> for FunctionCallbackInfo {
-  type Args = ();
-  unsafe fn enter_scope(_: *mut Self, _: Self::Args) {}
-}
-
 /// The information passed to a property callback about the context
 /// of the property access.
 #[repr(C)]
@@ -125,11 +118,6 @@ pub struct PropertyCallbackInfo {
   // The layout of this struct must match that of `class PropertyCallbackInfo`
   // as defined in v8.h.
   args: *mut Opaque,
-}
-
-unsafe impl<'s> ScopeDefinition<'s> for PropertyCallbackInfo {
-  type Args = ();
-  unsafe fn enter_scope(_: *mut Self, _: Self::Args) {}
 }
 
 pub struct FunctionCallbackArguments<'s> {
@@ -239,13 +227,11 @@ pub type FunctionCallback = extern "C" fn(*const FunctionCallbackInfo);
 
 impl<F> MapFnFrom<F> for FunctionCallback
 where
-  F: UnitType
-    + Fn(FunctionCallbackScope, FunctionCallbackArguments, ReturnValue),
+  F: UnitType + Fn(&mut HandleScope, FunctionCallbackArguments, ReturnValue),
 {
   fn mapping() -> Self {
     let f = |info: *const FunctionCallbackInfo| {
-      let scope: FunctionCallbackScope =
-        &mut crate::scope::Entered::new_root(info as *mut FunctionCallbackInfo);
+      let scope = &mut Scope::for_function_or_property_callback(info);
       let args = FunctionCallbackArguments::from_function_callback_info(info);
       let rv = ReturnValue::from_function_callback_info(info);
       (F::get())(scope, args, rv);
@@ -262,17 +248,11 @@ pub type AccessorNameGetterCallback<'s> =
 impl<F> MapFnFrom<F> for AccessorNameGetterCallback<'_>
 where
   F: UnitType
-    + Fn(
-      PropertyCallbackScope,
-      Local<Name>,
-      PropertyCallbackArguments,
-      ReturnValue,
-    ),
+    + Fn(&mut HandleScope, Local<Name>, PropertyCallbackArguments, ReturnValue),
 {
   fn mapping() -> Self {
     let f = |key: Local<Name>, info: *const PropertyCallbackInfo| {
-      let scope: PropertyCallbackScope =
-        &mut crate::scope::Entered::new_root(info as *mut PropertyCallbackInfo);
+      let scope = &mut Scope::for_function_or_property_callback(info);
       let args = PropertyCallbackArguments::from_property_callback_info(info);
       let rv = ReturnValue::from_property_callback_info(info);
       (F::get())(scope, key, args, rv);
@@ -286,7 +266,7 @@ impl Function {
   /// Create a function in the current execution context
   /// for a given FunctionCallback.
   pub fn new<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     context: Local<Context>,
     callback: impl MapFnTo<FunctionCallback>,
   ) -> Option<Local<'sc, Function>> {
@@ -298,7 +278,7 @@ impl Function {
   /// Create a function in the current execution context
   /// for a given FunctionCallback and associated data.
   pub fn new_with_data<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     context: Local<Context>,
     data: Local<Value>,
     callback: impl MapFnTo<FunctionCallback>,
@@ -314,7 +294,7 @@ impl Function {
 
   pub fn call<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     context: Local<Context>,
     recv: Local<Value>,
     args: &[Local<Value>],

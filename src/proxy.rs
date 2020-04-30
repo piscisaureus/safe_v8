@@ -1,8 +1,8 @@
 use crate::Context;
+use crate::HandleScope;
 use crate::Local;
 use crate::Object;
 use crate::Proxy;
-use crate::ToLocal;
 use crate::Value;
 
 extern "C" {
@@ -19,7 +19,7 @@ extern "C" {
 
 impl Proxy {
   pub fn new<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     context: Local<Context>,
     target: Local<Object>,
     handler: Local<Object>,
@@ -32,14 +32,14 @@ impl Proxy {
 
   pub fn get_handler<'sc>(
     &mut self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Local<'sc, Value> {
     unsafe { scope.to_local(v8__Proxy__GetHandler(&*self)) }.unwrap()
   }
 
   pub fn get_target<'sc>(
     &mut self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Local<'sc, Value> {
     unsafe { scope.to_local(v8__Proxy__GetTarget(&*self)) }.unwrap()
   }

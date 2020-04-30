@@ -1,41 +1,99 @@
+use std::borrow::Borrow;
+use std::convert::TryFrom;
+use std::mem::MaybeUninit;
+use std::ops::Deref;
+use std::ops::DerefMut;
+use std::ptr::null;
+
 use crate::external_references::ExternalReferences;
 use crate::support::char;
 use crate::support::int;
 use crate::support::intptr_t;
 use crate::Context;
+use crate::Global;
+use crate::HandleScope;
 use crate::Isolate;
-use crate::Local;
-use crate::OwnedIsolate;
+use crate::Scope;
 
-use std::borrow::Borrow;
-use std::convert::TryFrom;
-use std::mem::MaybeUninit;
-use std::ops::Deref;
+pub use raw::FunctionCodeHandling;
+pub use raw::StartupData;
 
-extern "C" {
-  fn v8__SnapshotCreator__CONSTRUCT(
-    buf: *mut MaybeUninit<SnapshotCreator>,
-    external_references: *const intptr_t,
-  );
-  fn v8__SnapshotCreator__DESTRUCT(this: *mut SnapshotCreator);
-  fn v8__SnapshotCreator__GetIsolate(
-    this: *mut SnapshotCreator,
-  ) -> *mut Isolate;
-  fn v8__SnapshotCreator__CreateBlob(
-    this: *mut SnapshotCreator,
-    function_code_handling: FunctionCodeHandling,
-  ) -> StartupData;
-  fn v8__SnapshotCreator__SetDefaultContext(
-    this: *mut SnapshotCreator,
-    context: *const Context,
-  );
-  fn v8__StartupData__DESTRUCT(this: *mut StartupData);
+/// Helper class to create a snapshot data blob.
+pub struct SnapshotCreator {
+  raw: raw::SnapshotCreator,
+  root_scope: Scope,
 }
 
-#[repr(C)]
-pub struct StartupData {
-  data: *const char,
-  raw_size: int,
+impl SnapshotCreator {
+  /// Create and enter an isolate, and set it up for serialization.
+  /// The isolate is created from scratch.
+  pub fn new(external_references: Option<&'static ExternalReferences>) -> Self {
+    let external_references_ptr = external_references
+      .map(|er| er.as_ptr())
+      .unwrap_or_else(null);
+    let mut raw = unsafe {
+      let mut buf = MaybeUninit::<raw::SnapshotCreator>::uninit();
+      raw::v8__SnapshotCreator__CONSTRUCT(&mut buf, external_references_ptr);
+      buf.assume_init()
+    };
+    let isolate =
+      unsafe { &mut *raw::v8__SnapshotCreator__GetIsolate(&mut raw) };
+    let root_scope = isolate.init(Box::new(()));
+    Self { raw, root_scope }
+  }
+}
+
+impl SnapshotCreator {
+  /// Set the default context to be included in the snapshot blob.
+  /// The snapshot will not contain the global proxy, and we expect one or a
+  /// global object template to create one, to be provided upon deserialization.
+  pub fn set_default_context(&mut self, context: Global<Context>) {
+    let raw = &mut self.raw as *mut _;
+    let scope = &mut HandleScope::new(self);
+    let context = context.get(scope).unwrap();
+    unsafe { raw::v8__SnapshotCreator__SetDefaultContext(raw, &*context) };
+  }
+
+  /// Creates a snapshot data blob.
+  /// This must not be called from within a handle scope.
+  pub fn create_blob(
+    &mut self,
+    function_code_handling: FunctionCodeHandling,
+  ) -> Option<StartupData> {
+    let blob = unsafe {
+      raw::v8__SnapshotCreator__CreateBlob(
+        &mut self.raw,
+        function_code_handling,
+      )
+    };
+    if blob.data.is_null() {
+      debug_assert!(blob.raw_size == 0);
+      None
+    } else {
+      debug_assert!(blob.raw_size > 0);
+      Some(blob)
+    }
+  }
+}
+
+impl Drop for SnapshotCreator {
+  fn drop(&mut self) {
+    self.root_scope.drop_root();
+    unsafe { raw::v8__SnapshotCreator__DESTRUCT(&mut self.raw) };
+  }
+}
+
+impl Deref for SnapshotCreator {
+  type Target = Scope;
+  fn deref(&self) -> &Self::Target {
+    &self.root_scope
+  }
+}
+
+impl DerefMut for SnapshotCreator {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    &mut self.root_scope
+  }
 }
 
 impl Deref for StartupData {
@@ -61,80 +119,44 @@ impl Borrow<[u8]> for StartupData {
 
 impl Drop for StartupData {
   fn drop(&mut self) {
-    unsafe { v8__StartupData__DESTRUCT(self) }
+    unsafe { raw::v8__StartupData__DESTRUCT(self) }
   }
 }
 
-#[repr(C)]
-pub enum FunctionCodeHandling {
-  Clear,
-  Keep,
-}
+mod raw {
+  use super::*;
 
-/// Helper class to create a snapshot data blob.
-#[repr(C)]
-pub struct SnapshotCreator([usize; 1]);
-
-impl SnapshotCreator {
-  /// Create and enter an isolate, and set it up for serialization.
-  /// The isolate is created from scratch.
-  pub fn new(external_references: Option<&'static ExternalReferences>) -> Self {
-    let mut snapshot_creator: MaybeUninit<Self> = MaybeUninit::uninit();
-    let external_references_ptr = if let Some(er) = external_references {
-      er.as_ptr()
-    } else {
-      std::ptr::null()
-    };
-    unsafe {
-      v8__SnapshotCreator__CONSTRUCT(
-        &mut snapshot_creator,
-        external_references_ptr,
-      );
-      snapshot_creator.assume_init()
-    }
+  #[repr(C)]
+  pub enum FunctionCodeHandling {
+    Clear,
+    Keep,
   }
-}
+  #[repr(C)]
+  pub struct SnapshotCreator([usize; 1]);
 
-impl Drop for SnapshotCreator {
-  fn drop(&mut self) {
-    unsafe { v8__SnapshotCreator__DESTRUCT(self) };
-  }
-}
-
-impl SnapshotCreator {
-  /// Set the default context to be included in the snapshot blob.
-  /// The snapshot will not contain the global proxy, and we expect one or a
-  /// global object template to create one, to be provided upon deserialization.
-  pub fn set_default_context<'sc>(&mut self, context: Local<'sc, Context>) {
-    unsafe { v8__SnapshotCreator__SetDefaultContext(self, &*context) };
+  #[repr(C)]
+  pub struct StartupData {
+    pub(super) data: *const char,
+    pub(super) raw_size: int,
   }
 
-  /// Creates a snapshot data blob.
-  /// This must not be called from within a handle scope.
-  pub fn create_blob(
-    &mut self,
-    function_code_handling: FunctionCodeHandling,
-  ) -> Option<StartupData> {
-    let blob =
-      unsafe { v8__SnapshotCreator__CreateBlob(self, function_code_handling) };
-    if blob.data.is_null() {
-      debug_assert!(blob.raw_size == 0);
-      None
-    } else {
-      debug_assert!(blob.raw_size > 0);
-      Some(blob)
-    }
-  }
-
-  /// This is marked unsafe because it should be called at most once per snapshot
-  /// creator.
-  // TODO Because the SnapshotCreator creates its own isolate, we need a way to
-  // get an owned handle to it. This is a questionable design which ought to be
-  // revisited after the libdeno integration is complete.
-  pub unsafe fn get_owned_isolate(&mut self) -> OwnedIsolate {
-    let isolate_ptr = v8__SnapshotCreator__GetIsolate(self);
-    let mut owned_isolate = OwnedIsolate::new(isolate_ptr);
-    owned_isolate.create_annex(Box::new(()));
-    owned_isolate
+  extern "C" {
+    pub fn v8__SnapshotCreator__CONSTRUCT(
+      buf: *mut MaybeUninit<SnapshotCreator>,
+      external_references: *const intptr_t,
+    );
+    pub fn v8__SnapshotCreator__DESTRUCT(this: *mut SnapshotCreator);
+    pub fn v8__SnapshotCreator__GetIsolate(
+      this: *mut SnapshotCreator,
+    ) -> *mut Isolate;
+    pub fn v8__SnapshotCreator__CreateBlob(
+      this: *mut SnapshotCreator,
+      function_code_handling: FunctionCodeHandling,
+    ) -> StartupData;
+    pub fn v8__SnapshotCreator__SetDefaultContext(
+      this: *mut SnapshotCreator,
+      context: *const Context,
+    );
+    pub fn v8__StartupData__DESTRUCT(this: *mut StartupData);
   }
 }

@@ -48,7 +48,7 @@
 //!
 //! Furthermore, many callbacks will receive receive an appropriate Scope object
 //! as their first argument, which 'encodes' the the state the isolate is in
-//! when the callback is called. E.g. a FunctionCallbackScope implements
+//! when the callback is called. E.g. a Scope implements
 //! InIsolate + and ToLocal (it acts as a HandleScope).
 //! HostImportModuleDynamicallyScope would also implement InIsolate plus
 //! EscapeLocal (it doesn't act like a HandleScope, but it lets you safely
@@ -81,7 +81,7 @@ mod exception;
 mod external_references;
 mod function;
 mod global;
-mod handle_scope;
+//mod handle_scope;
 mod isolate;
 mod isolate_create_params;
 mod local;
@@ -95,7 +95,8 @@ mod promise;
 mod property_attribute;
 mod proxy;
 mod scope2;
-mod scope_traits;
+//mod scope_traits;
+mod get_isolate;
 mod script;
 mod script_or_module;
 mod shared_array_buffer;
@@ -103,13 +104,13 @@ mod snapshot;
 mod string;
 mod support;
 mod template;
-mod try_catch;
+//mod try_catch;
 mod uint8_array;
 mod value;
 
 pub mod inspector;
 pub mod json;
-pub mod scope;
+//pub mod scope;
 pub mod script_compiler;
 // This module is intentionally named "V8" rather than "v8" to match the
 // C++ namespace "v8::V8".
@@ -123,8 +124,8 @@ pub use external_references::ExternalReference;
 pub use external_references::ExternalReferences;
 pub use function::*;
 pub use global::Global;
-pub use handle_scope::EscapableHandleScope;
-pub use handle_scope::HandleScope;
+//pub use handle_scope::EscapableHandleScope;
+//pub use handle_scope::HandleScope;
 pub use isolate::HostImportModuleDynamicallyCallback;
 pub use isolate::HostInitializeImportMetaObjectCallback;
 pub use isolate::Isolate;
@@ -146,12 +147,12 @@ pub use primitives::*;
 pub use promise::{PromiseRejectEvent, PromiseRejectMessage, PromiseState};
 pub use property_attribute::*;
 pub use proxy::*;
-pub use scope::CallbackScope;
-pub use scope::ContextScope;
-pub use scope::FunctionCallbackScope;
-pub use scope::PropertyCallbackScope;
-pub use scope::Scope;
-pub use scope_traits::*;
+pub use scope2::ContextScope;
+pub use scope2::EscapableHandleScope;
+pub use scope2::HandleScope;
+pub use scope2::Ref as ScopeRef;
+pub use scope2::Scope;
+pub use scope2::TryCatch;
 pub use script::ScriptOrigin;
 pub use snapshot::FunctionCodeHandling;
 pub use snapshot::SnapshotCreator;
@@ -162,7 +163,7 @@ pub use support::SharedRef;
 pub use support::UniquePtr;
 pub use support::UniqueRef;
 pub use template::*;
-pub use try_catch::{TryCatch, TryCatchScope};
+//pub use try_catch::{TryCatch, TryCatchScope};
 
 // TODO(piscisaureus): Ideally this trait would not be exported.
 pub use support::MapFnTo;

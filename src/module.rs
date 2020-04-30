@@ -8,10 +8,10 @@ use crate::support::MaybeBool;
 use crate::support::ToCFn;
 use crate::support::UnitType;
 use crate::Context;
+use crate::HandleScope;
 use crate::Local;
 use crate::Module;
 use crate::String;
-use crate::ToLocal;
 use crate::Value;
 
 /// Called during Module::instantiate_module. Provided with arguments:
@@ -210,7 +210,7 @@ impl Module {
   #[must_use]
   pub fn evaluate<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     context: Local<Context>,
   ) -> Option<Local<'sc, Value>> {
     unsafe { scope.to_local(v8__Module__Evaluate(&*self, &*context)) }

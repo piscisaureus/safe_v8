@@ -6,12 +6,12 @@ use crate::scope2::ScopeStore;
 use crate::support::Opaque;
 use crate::Context;
 use crate::Function;
-use crate::InIsolate;
 use crate::Local;
 use crate::Message;
 use crate::Module;
 use crate::Object;
 use crate::Promise;
+use crate::Scope;
 use crate::ScriptOrModule;
 use crate::String;
 use crate::Value;
@@ -24,7 +24,6 @@ use std::ffi::c_void;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::ptr::null_mut;
-use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -145,10 +144,16 @@ impl Isolate {
   pub fn new(params: CreateParams) -> OwnedIsolate {
     crate::V8::assert_initialized();
     let (raw_create_params, create_param_allocations) = params.finalize();
-    let cxx_isolate = unsafe { v8__Isolate__New(&raw_create_params) };
-    let mut owned_isolate = OwnedIsolate::new(cxx_isolate);
-    owned_isolate.create_annex(create_param_allocations);
-    owned_isolate
+    let isolate = unsafe { &mut *v8__Isolate__New(&raw_create_params) };
+    let root_scope = isolate.init(create_param_allocations);
+    OwnedIsolate::new(root_scope)
+  }
+
+  pub(crate) fn init(&mut self, allocations: Box<dyn Any>) -> Scope {
+    let annex_slot = unsafe { v8__Isolate__GetData(self, 0) };
+    assert!(annex_slot.is_null());
+    self.create_annex(allocations);
+    Scope::root(&mut self.get_annex_mut().scopes)
   }
 
   /// Initial configuration parameters for a new Isolate.
@@ -432,10 +437,11 @@ impl IsolateAnnex {
     isolate: &mut Isolate,
     create_param_allocations: Box<dyn Any>,
   ) -> Self {
+    let scopes = ScopeStore::new(isolate);
     Self {
       create_param_allocations,
       slots: HashMap::new(),
-      scopes: ScopeStore::new(isolate),
+      scopes,
       isolate,
       isolate_mutex: Mutex::new(()),
     }
@@ -551,38 +557,30 @@ impl IsolateHandle {
 }
 
 /// Same as Isolate but gets disposed when it goes out of scope.
-pub struct OwnedIsolate {
-  cxx_isolate: NonNull<Isolate>,
-}
+pub struct OwnedIsolate(Scope);
 
 impl OwnedIsolate {
-  pub(crate) fn new(cxx_isolate: *mut Isolate) -> Self {
-    let cxx_isolate = NonNull::new(cxx_isolate).unwrap();
-    Self { cxx_isolate }
-  }
-}
-
-impl InIsolate for OwnedIsolate {
-  fn isolate(&mut self) -> &mut Isolate {
-    self.deref_mut()
+  pub(crate) fn new(root_scope: Scope) -> Self {
+    Self(root_scope)
   }
 }
 
 impl Drop for OwnedIsolate {
   fn drop(&mut self) {
-    unsafe { self.cxx_isolate.as_mut().dispose() }
+    self.0.drop_root();
+    unsafe { self.isolate().dispose() }
   }
 }
 
 impl Deref for OwnedIsolate {
-  type Target = Isolate;
+  type Target = Scope;
   fn deref(&self) -> &Self::Target {
-    unsafe { self.cxx_isolate.as_ref() }
+    &self.0
   }
 }
 
 impl DerefMut for OwnedIsolate {
   fn deref_mut(&mut self) -> &mut Self::Target {
-    unsafe { self.cxx_isolate.as_mut() }
+    &mut self.0
   }
 }

@@ -60,3 +60,9 @@ which = "3.1.1"
 
 [dev-dependencies]
 trybuild = "1.0.26"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

@@ -1,13 +1,13 @@
 use crate::support::Maybe;
 use crate::BigInt;
 use crate::Context;
+use crate::HandleScope;
 use crate::Int32;
 use crate::Integer;
 use crate::Local;
 use crate::Number;
 use crate::Object;
 use crate::String;
-use crate::ToLocal;
 use crate::Uint32;
 use crate::Value;
 
@@ -421,7 +421,7 @@ impl Value {
 
   pub fn to_big_int<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Option<Local<'sc, BigInt>> {
     scope.get_current_context().and_then(|context| unsafe {
       Local::from_raw(v8__Value__ToBigInt(self, &*context))
@@ -430,7 +430,7 @@ impl Value {
 
   pub fn to_number<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Option<Local<'sc, Number>> {
     scope.get_current_context().and_then(|context| unsafe {
       Local::from_raw(v8__Value__ToNumber(self, &*context))
@@ -439,7 +439,7 @@ impl Value {
 
   pub fn to_string<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Option<Local<'sc, String>> {
     scope.get_current_context().and_then(|context| unsafe {
       Local::from_raw(v8__Value__ToString(self, &*context))
@@ -448,7 +448,7 @@ impl Value {
 
   pub fn to_detail_string<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Option<Local<'sc, String>> {
     scope.get_current_context().and_then(|context| unsafe {
       Local::from_raw(v8__Value__ToDetailString(self, &*context))
@@ -457,7 +457,7 @@ impl Value {
 
   pub fn to_object<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Option<Local<'sc, Object>> {
     scope.get_current_context().and_then(|context| unsafe {
       Local::from_raw(v8__Value__ToObject(self, &*context))
@@ -466,7 +466,7 @@ impl Value {
 
   pub fn to_integer<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Option<Local<'sc, Integer>> {
     scope.get_current_context().and_then(|context| unsafe {
       Local::from_raw(v8__Value__ToInteger(self, &*context))
@@ -475,7 +475,7 @@ impl Value {
 
   pub fn to_uint32<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Option<Local<'sc, Uint32>> {
     scope.get_current_context().and_then(|context| unsafe {
       Local::from_raw(v8__Value__ToUint32(self, &*context))
@@ -484,17 +484,14 @@ impl Value {
 
   pub fn to_int32<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Option<Local<'sc, Int32>> {
     scope.get_current_context().and_then(|context| unsafe {
       Local::from_raw(v8__Value__ToInt32(self, &*context))
     })
   }
 
-  pub fn number_value<'sc>(
-    &self,
-    scope: &mut impl ToLocal<'sc>,
-  ) -> Option<f64> {
+  pub fn number_value<'sc>(&self, scope: &mut HandleScope<'sc>) -> Option<f64> {
     scope.get_current_context().and_then(|context| unsafe {
       let mut out = Maybe::<f64>::default();
       v8__Value__NumberValue(self, &*context, &mut out);
@@ -504,7 +501,7 @@ impl Value {
 
   pub fn integer_value<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
   ) -> Option<i64> {
     scope.get_current_context().and_then(|context| unsafe {
       let mut out = Maybe::<i64>::default();
@@ -513,10 +510,7 @@ impl Value {
     })
   }
 
-  pub fn uint32_value<'sc>(
-    &self,
-    scope: &mut impl ToLocal<'sc>,
-  ) -> Option<u32> {
+  pub fn uint32_value<'sc>(&self, scope: &mut HandleScope<'sc>) -> Option<u32> {
     scope.get_current_context().and_then(|context| unsafe {
       let mut out = Maybe::<u32>::default();
       v8__Value__Uint32Value(self, &*context, &mut out);
@@ -524,7 +518,7 @@ impl Value {
     })
   }
 
-  pub fn int32_value<'sc>(&self, scope: &mut impl ToLocal<'sc>) -> Option<i32> {
+  pub fn int32_value<'sc>(&self, scope: &mut HandleScope<'sc>) -> Option<i32> {
     scope.get_current_context().and_then(|context| unsafe {
       let mut out = Maybe::<i32>::default();
       v8__Value__Int32Value(self, &*context, &mut out);

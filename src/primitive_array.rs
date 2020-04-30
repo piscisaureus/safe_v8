@@ -1,10 +1,10 @@
 // Copyright 2019-2020 the Deno authors. All rights reserved. MIT license.
 use crate::support::int;
+use crate::HandleScope;
 use crate::Isolate;
 use crate::Local;
 use crate::Primitive;
 use crate::PrimitiveArray;
-use crate::ToLocal;
 
 extern "C" {
   fn v8__PrimitiveArray__New(
@@ -30,7 +30,7 @@ extern "C" {
 
 impl PrimitiveArray {
   pub fn new<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     length: usize,
   ) -> Local<'sc, PrimitiveArray> {
     let ptr =
@@ -44,7 +44,7 @@ impl PrimitiveArray {
 
   pub fn set<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     index: usize,
     item: Local<'_, Primitive>,
   ) {
@@ -55,7 +55,7 @@ impl PrimitiveArray {
 
   pub fn get<'sc>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     index: usize,
   ) -> Local<'sc, Primitive> {
     let ptr =

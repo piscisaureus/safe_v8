@@ -4,11 +4,11 @@ use std::ptr::null;
 
 use crate::Boolean;
 use crate::Context;
+use crate::HandleScope;
 use crate::Integer;
 use crate::Local;
 use crate::Script;
 use crate::String;
-use crate::ToLocal;
 use crate::Value;
 
 /// The origin, within a file, of a script.
@@ -43,7 +43,7 @@ extern "C" {
 impl Script {
   /// A shorthand for ScriptCompiler::Compile().
   pub fn compile<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     context: Local<Context>,
     source: Local<String>,
     origin: Option<&ScriptOrigin>,
@@ -63,7 +63,7 @@ impl Script {
   /// UnboundScript::BindToCurrentContext()).
   pub fn run<'sc>(
     &mut self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'sc>,
     context: Local<Context>,
   ) -> Option<Local<'sc, Value>> {
     unsafe { scope.to_local(v8__Script__Run(self, &*context)) }
