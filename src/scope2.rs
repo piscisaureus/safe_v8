@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::mem::align_of;
 use std::mem::needs_drop;
@@ -23,14 +23,13 @@ use crate::Value;
 pub(crate) use internal::ScopeStore;
 
 use internal::ActiveScopeData;
-use internal::ScopeCookie;
 use internal::ScopeData;
 use params::ScopeParams;
 use params::{No, Yes};
 
 pub struct Ref<'a, Scope: ScopeParams> {
   scope: Scope,
-  _lifetime: PhantomData<&'a mut ()>,
+  _lifetime: PhantomData<&'a mut &'a ()>,
 }
 
 impl<'a, Scope: ScopeParams> Ref<'a, Scope> {
@@ -43,14 +42,10 @@ impl<'a, Scope: ScopeParams> Ref<'a, Scope> {
   }
 }
 
-impl<'a, Scope: ScopeParams> Drop for Ref<'a, Scope> {
-  #[inline(always)]
-  fn drop(&mut self) {
-    ScopeStore::drop_scope(&mut self.scope)
-  }
-}
-
-impl<'a, Scope: ScopeParams> Deref for Ref<'a, Scope> {
+impl<'a, Scope: ScopeParams> Deref for Ref<'a, Scope>
+where
+  Self: 'a,
+{
   type Target = Scope;
   #[inline(always)]
   fn deref(&self) -> &Self::Target {
@@ -58,7 +53,10 @@ impl<'a, Scope: ScopeParams> Deref for Ref<'a, Scope> {
   }
 }
 
-impl<'a, Scope: ScopeParams> DerefMut for Ref<'a, Scope> {
+impl<'a, Scope: ScopeParams> DerefMut for Ref<'a, Scope>
+where
+  Self: 'a,
+{
   #[inline(always)]
   fn deref_mut(&mut self) -> &mut Self::Target {
     &mut self.scope
@@ -68,14 +66,30 @@ impl<'a, Scope: ScopeParams> DerefMut for Ref<'a, Scope> {
 #[derive(Debug)]
 pub struct Scope<Handles = No, Escape = No, TryCatch = No> {
   store: *const ScopeStore,
-  cookie: ScopeCookie,
-  frame_count: u32,
+  stack_base: u32,
+  stack_limit: u32,
+  lazy_drop: bool,
   _phantom: PhantomData<(Handles, Escape, TryCatch)>,
 }
 
 impl<Handles, Escape, TryCatch> Drop for Scope<Handles, Escape, TryCatch> {
   fn drop(&mut self) {
-    println!("Drop Scope");
+    ScopeStore::drop_scope(self);
+    {
+      if self.stack_limit == 0 {
+        return;
+      }
+      let store = self.get_store();
+      let inner = store.inner.borrow();
+      let unwind_limit = inner.get_unwind_limit();
+      let stack_limit = inner.get_stack_limit();
+      let scope_base = self.stack_base;
+      let scope_limit = self.stack_limit;
+      println!(
+        "Drop Scope scope_base={} scope_limit={}\n  unwind_limit={}  stack_limit={}",
+        scope_base, scope_limit, unwind_limit, stack_limit
+      );
+    }
   }
 }
 
@@ -161,12 +175,18 @@ impl<Handles, Escape, TryCatch> Scope<Handles, Escape, TryCatch> {
 impl Scope {
   #[inline(always)]
   pub(crate) fn root(scope_store: &'_ ScopeStore) -> Self {
-    ScopeStore::new_root_scope_with(scope_store, |_| ())
+    ScopeStore::new_root_scope(scope_store)
   }
 
   #[inline(always)]
   pub(crate) fn drop_root(&mut self) {
-    ScopeStore::drop_scope(self);
+    println!("Drop Root >>>");
+    ScopeStore::drop_root_scope(self);
+    println!("<<< Drop Root");
+  }
+
+  pub(crate) fn unwind_to(&mut self) {
+    ScopeStore::unwind_to(self);
   }
 
   #[inline(always)]
@@ -257,9 +277,9 @@ impl<'h, Escape, TryCatch> Scope<Yes<'h>, Escape, TryCatch> {
 
 impl<'h, 'e: 'h, TryCatch> Scope<Yes<'h>, Yes<'e>, TryCatch> {
   #[inline(always)]
-  pub fn escapable_handle_scope<'a, Escape_>(
-    parent: &'a mut Scope<Yes<'e>, Escape_, TryCatch>,
-  ) -> Ref<'a, Self> {
+  pub fn escapable_handle_scope<'p: 'h, Escape_>(
+    parent: &'p mut Scope<Yes<'e>, Escape_, TryCatch>,
+  ) -> Ref<'h, Self> {
     ScopeStore::new_inner_scope_with(parent, |s| {
       s.push::<data::EscapeSlot>(());
       s.push::<data::HandleScope>(());
@@ -281,9 +301,9 @@ impl<'h, 'e: 'h, TryCatch> Scope<Yes<'h>, Yes<'e>, TryCatch> {
 
 impl<'t, Handles, Escape> Scope<Handles, Escape, Yes<'t>> {
   #[inline(always)]
-  pub fn try_catch<'a, TryCatch_>(
-    parent: &'a mut Scope<Handles, Escape, TryCatch_>,
-  ) -> Ref<'a, Self> {
+  pub fn try_catch<'p: 't, TryCatch_>(
+    parent: &'p mut Scope<Handles, Escape, TryCatch_>,
+  ) -> Ref<'t, Self> {
     ScopeStore::new_inner_scope_with(parent, |s| {
       s.push::<data::TryCatch>(());
     })
@@ -415,9 +435,12 @@ pub type HandleScope<'h> = Scope<Yes<'h>, No, No>;
 impl<'h> HandleScope<'h> {
   #[allow(clippy::new_ret_no_self)]
   #[inline(always)]
-  pub fn new<'a, Handles_, Escape, TryCatch>(
-    parent: &'a mut Scope<Handles_, Escape, TryCatch>,
-  ) -> Ref<'a, Scope<Yes<'h>, Escape, TryCatch>> {
+  pub fn new<'p: 'h, Handles_, Escape, TryCatch>(
+    parent: &'p mut Scope<Handles_, Escape, TryCatch>,
+  ) -> Ref<'h, Scope<Yes<'h>, Escape, TryCatch>>
+  where
+    Self: 'h,
+  {
     Scope::handle_scope(parent)
   }
 }
@@ -427,9 +450,9 @@ pub type EscapableHandleScope<'h, 'e> = Scope<Yes<'h>, Yes<'e>, No>;
 impl<'h, 'e: 'h> EscapableHandleScope<'h, 'e> {
   #[allow(clippy::new_ret_no_self)]
   #[inline(always)]
-  pub fn new<'a, Escape_, TryCatch>(
-    parent: &'a mut Scope<Yes<'e>, Escape_, TryCatch>,
-  ) -> Ref<'a, Scope<Yes<'h>, Yes<'e>, TryCatch>> {
+  pub fn new<'p: 'h, Escape_, TryCatch>(
+    parent: &'p mut Scope<Yes<'e>, Escape_, TryCatch>,
+  ) -> Ref<'h, Scope<Yes<'h>, Yes<'e>, TryCatch>> {
     Scope::escapable_handle_scope(parent)
   }
 }
@@ -439,9 +462,9 @@ pub type TryCatch<'t> = Scope<No, No, Yes<'t>>;
 impl<'t> TryCatch<'t> {
   #[allow(clippy::new_ret_no_self)]
   #[inline(always)]
-  pub fn new<'a, Handles, Escape, TryCatch_>(
-    parent: &'a mut Scope<Handles, Escape, TryCatch_>,
-  ) -> Ref<'a, Scope<Handles, Escape, Yes<'t>>> {
+  pub fn new<'p: 't, Handles, Escape, TryCatch_>(
+    parent: &'p mut Scope<Handles, Escape, TryCatch_>,
+  ) -> Ref<'t, Scope<Handles, Escape, Yes<'t>>> {
     Scope::try_catch(parent)
   }
 }
@@ -752,16 +775,32 @@ mod internal {
   use super::*;
 
   pub(super) trait ScopeInit: ScopeParams {
-    fn new_with_store(store: &ScopeStore) -> Self;
+    fn new_from_store(store: &ScopeStore) -> Self;
+    fn new_from_parent(parent: &impl ScopeParams) -> Self;
   }
 
   impl<Handles, Escape, TryCatch> ScopeInit for Scope<Handles, Escape, TryCatch> {
     #[inline(always)]
-    fn new_with_store(store: &ScopeStore) -> Self {
+    fn new_from_store(store: &ScopeStore) -> Self {
+      let mut inner = store.inner.borrow_mut();
+      inner.unwind_to_limit();
       Self {
         store,
-        cookie: ScopeCookie::NONE,
-        frame_count: 0,
+        stack_base: inner.get_stack_limit(),
+        stack_limit: inner.get_stack_limit(),
+        lazy_drop: false,
+        _phantom: PhantomData,
+      }
+    }
+
+    #[inline(always)]
+    fn new_from_parent(parent: &impl ScopeParams) -> Self {
+      let parent = parent.as_scope();
+      Self {
+        store: parent.get_store(),
+        stack_base: parent.stack_limit,
+        stack_limit: parent.stack_limit,
+        lazy_drop: true,
         _phantom: PhantomData,
       }
     }
@@ -769,15 +808,13 @@ mod internal {
 
   #[derive(Debug)]
   pub(crate) struct ScopeStore {
-    top_scope_cookie: Cell<ScopeCookie>,
-    inner: ScopeStoreInner,
+    pub(super) inner: RefCell<ScopeStoreInner>,
   }
 
   impl ScopeStore {
     pub fn new(isolate: &mut Isolate) -> Self {
       Self {
-        top_scope_cookie: Default::default(),
-        inner: ScopeStoreInner::new(isolate),
+        inner: RefCell::new(ScopeStoreInner::new(isolate)),
       }
     }
 
@@ -787,31 +824,16 @@ mod internal {
       f: impl Fn(&mut ScopeStoreInner) -> R,
     ) -> R {
       let scope = scope.as_scope_mut();
-      let self_ = scope.get_store();
-      ScopeCookie::borrow(&self_.top_scope_cookie, scope.cookie);
-      let result = {
-        // This is safe because we can only reach this point when `scope.cookie`
-        // matches `top_scope_cookie`. There is only one scope at any time with
-        // a matching cookie, and it can only enter here once as our cookie
-        // temporarily changes to `ScopeCookie::BORROWED` when it does.
-        #[allow(clippy::cast_ref_to_mut)]
-        let inner =
-          unsafe { &mut *(&self_.inner as *const _ as *mut ScopeStoreInner) };
-        // TODO: assigning `scope.frame_count` to `inner.top_scope_frame_count`
-        // and back does not seem to get optimized out, even if it should be
-        // clear that there is no aliasing taking place. E.g. `to_local()`
-        // produces this assembly code:
-        //  mov ecx, dword ptr [rdi + 12]  # top_scope_frame_count = frame_count
-        //  mov dword ptr [rax + 88], 0
-        //  mov dword ptr [rdi + 12], ecx  # frame_count = top_scope_frame_count
-        // It should be possible to avoid this.
-        debug_assert_eq!(inner.top_scope_frame_count, 0);
-        inner.top_scope_frame_count = scope.frame_count;
-        let result = f(inner);
-        scope.frame_count = take(&mut inner.top_scope_frame_count);
-        result
-      };
-      ScopeCookie::unborrow(&self_.top_scope_cookie, scope.cookie);
+      let mut inner = scope.get_store().inner.borrow_mut();
+      while scope.stack_limit < inner.get_stack_limit() {
+        eprint!("Unwind {} => ", inner.get_stack_limit());
+        assert!(scope.stack_limit <= inner.get_unwind_limit());
+        inner.pop();
+        eprintln!("{}", inner.get_stack_limit());
+      }
+      assert_eq!(scope.stack_limit, inner.get_stack_limit());
+      let result = f(&mut inner);
+      scope.stack_limit = inner.get_stack_limit();
       result
     }
 
@@ -835,14 +857,25 @@ mod internal {
       scope: &mut Scope,
       f: impl Fn(&mut ScopeStoreInner) -> (),
     ) {
-      //println!("New scope: {}", std::any::type_name::<Scope>());
-      let scope = scope.as_scope_mut();
-
-      let next_cookie = ScopeCookie::next(&self.top_scope_cookie);
-      ScopeCookie::set(&mut scope.cookie, next_cookie);
-
-      debug_assert_eq!(scope.frame_count, 0);
-      Self::with_mut(scope, f);
+      let scope_mut = scope.as_scope_mut();
+      let stack_limit = Self::with_mut(scope_mut, move |inner| {
+        f(inner);
+        inner.get_stack_limit()
+      });
+      assert!(
+        stack_limit > scope_mut.stack_base,
+        "scope didn't push anything to the stack"
+      );
+      scope_mut.stack_limit = stack_limit;
+      let scope_base = scope_mut.stack_base;
+      let scope_limit = scope_mut.stack_limit;
+      let unwind_limit =
+        scope_mut.get_store().inner.borrow().get_unwind_limit();
+      let stack_limit = scope_mut.get_store().inner.borrow().get_stack_limit();
+      println!(
+        "New Scope scope_base={} scope_limit={}\n  unwind_limit={}  stack_limit={}",
+        scope_base, scope_limit, unwind_limit, stack_limit
+      );
     }
 
     #[inline(always)]
@@ -850,7 +883,7 @@ mod internal {
       &self,
       f: impl Fn(&mut ScopeStoreInner),
     ) -> Ref<'a, Scope> {
-      let mut scope = Scope::new_with_store(self);
+      let mut scope = Scope::new_from_store(self);
       self.init_scope_with(&mut scope, f);
       Ref::<'a, Scope>::new(scope)
     }
@@ -860,44 +893,58 @@ mod internal {
       parent: &'_ mut impl ScopeParams,
       f: impl Fn(&mut ScopeStoreInner),
     ) -> Ref<'a, Scope> {
-      let parent = parent.as_scope_mut();
-      let store = parent.get_store();
-      assert_eq!(parent.cookie, store.top_scope_cookie.get());
-      store.new_scope_with(f)
+      let mut scope = Scope::new_from_parent(parent.as_scope());
+      let scope_mut = scope.as_scope_mut();
+      let store = scope_mut.get_store();
+      store.init_scope_with(scope_mut, f);
+      Ref::<'a, Scope>::new(scope)
     }
 
     #[inline(always)]
-    pub(super) fn new_root_scope_with<Scope: ScopeInit>(
-      &self,
-      f: impl Fn(&mut ScopeStoreInner),
-    ) -> Scope {
-      assert_eq!(ScopeCookie::NONE, self.top_scope_cookie.get());
-      let mut scope = Scope::new_with_store(self);
-      self.init_scope_with(&mut scope, f);
+    pub(super) fn new_root_scope<Scope: ScopeInit>(&self) -> Scope {
+      assert_eq!(self.inner.borrow().frame_stack.len(), 0);
+      let scope = Scope::new_from_store(self);
       scope
     }
 
     #[inline(always)]
+    pub fn unwind_to<Scope: ScopeParams>(scope: &mut Scope) {
+      let scope_mut = scope.as_scope_mut();
+      let mut inner = scope_mut.get_store().inner.borrow_mut();
+      inner.set_unwind_limit(scope_mut.stack_limit);
+      inner.unwind_to_limit();
+    }
+
+    #[inline(always)]
     pub fn drop_scope<Scope: ScopeParams>(scope: &mut Scope) {
-      //println!("Drop scope: {}", std::any::type_name::<Scope>());
+      let scope_mut = scope.as_scope_mut();
+      // The root scope does not push any frames to the stack, so there's no
+      // need to update the unwind limit.
+      if scope_mut.stack_limit == 0 {
+        return;
+      }
+      let mut inner = scope_mut.get_store().inner.borrow_mut();
+      inner.set_unwind_limit(scope_mut.stack_base);
+      if !scope_mut.lazy_drop {
+        inner.unwind_to_limit();
+      }
+    }
+
+    #[inline(always)]
+    pub fn drop_root_scope<Scope: ScopeParams>(scope: &mut Scope) {
       let scope = scope.as_scope_mut();
-
-      Self::with_mut(scope, |inner| {
-        while inner.top_scope_frame_count > 0 {
-          inner.pop()
-        }
-      });
-      debug_assert_eq!(scope.frame_count, 0);
-
-      let self_ = scope.get_store();
-      let cookie = ScopeCookie::revert(&self_.top_scope_cookie);
-      ScopeCookie::reset(&mut scope.cookie, cookie);
+      assert_eq!(scope.stack_limit, 0);
+      //Self::with_mut(scope, |_| {});
     }
   }
 
   impl Drop for ScopeStore {
     fn drop(&mut self) {
-      assert_eq!(self.top_scope_cookie.get(), ScopeCookie::default());
+      let mut inner = self.inner.borrow_mut();
+      assert_eq!(inner.frame_stack_unwind_limit, 0);
+      while inner.get_stack_limit() > 0 {
+        inner.pop()
+      }
     }
   }
 
@@ -906,7 +953,7 @@ mod internal {
     isolate: *mut Isolate,
     active_scope_data: ActiveScopeData,
     frame_stack: Vec<u8>,
-    top_scope_frame_count: u32,
+    frame_stack_unwind_limit: u32,
   }
 
   impl ScopeStoreInner {
@@ -915,15 +962,14 @@ mod internal {
         isolate,
         active_scope_data: Default::default(),
         frame_stack: Vec::with_capacity(Self::FRAME_STACK_SIZE),
-        top_scope_frame_count: 0,
+        frame_stack_unwind_limit: 0,
       }
     }
   }
 
   impl Drop for ScopeStoreInner {
     fn drop(&mut self) {
-      //println!("Drop ScopeStoreInner")
-      assert_eq!(self.top_scope_frame_count, 0);
+      assert_eq!(self.frame_stack_unwind_limit, 0);
       assert_eq!(self.frame_stack.len(), 0);
     }
   }
@@ -950,16 +996,38 @@ mod internal {
     }
 
     #[inline(always)]
+    pub fn set_unwind_limit(&mut self, unwind_limit: u32) {
+      assert!(unwind_limit <= self.frame_stack_unwind_limit);
+      debug_assert!(unwind_limit <= self.get_stack_limit());
+      self.frame_stack_unwind_limit = unwind_limit;
+    }
+
+    #[inline(always)]
+    pub fn get_unwind_limit(&self) -> u32 {
+      self.frame_stack_unwind_limit as u32
+    }
+
+    #[inline(always)]
+    pub fn get_stack_limit(&self) -> u32 {
+      self.frame_stack.len() as u32
+    }
+
+    #[inline(always)]
+    pub fn unwind_to_limit(&mut self) {
+      while self.get_stack_limit() > self.get_unwind_limit() {
+        self.pop()
+      }
+    }
+
+    #[inline(always)]
     pub fn push<D: ScopeData>(&mut self, mut args: D::Args) {
       let Self {
         isolate,
         active_scope_data,
         frame_stack,
-        top_scope_frame_count,
+        frame_stack_unwind_limit,
       } = self;
       let isolate = unsafe { &mut **isolate };
-
-      *top_scope_frame_count += 1;
 
       unsafe {
         // Determine byte range on the stack that the new frame will occupy.
@@ -970,6 +1038,7 @@ mod internal {
         let new_stack_byte_length = frame_byte_offset + frame_byte_length;
         assert!(new_stack_byte_length <= frame_stack.capacity());
         frame_stack.set_len(new_stack_byte_length);
+        *frame_stack_unwind_limit = new_stack_byte_length as u32;
 
         // Obtain a pointer to the new stack frame.
         let frame_ptr = frame_stack.get_mut(frame_byte_offset).unwrap();
@@ -1001,12 +1070,9 @@ mod internal {
         isolate,
         active_scope_data,
         frame_stack,
-        top_scope_frame_count,
+        ..
       } = self;
       let isolate = unsafe { &mut **isolate };
-
-      debug_assert!(*top_scope_frame_count > 0);
-      *top_scope_frame_count -= 1;
 
       // Locate the metadata part of the stack frame we want to pop.
       let metadata_byte_length = size_of::<ScopeStackFrameMetadata>();
@@ -1034,6 +1100,7 @@ mod internal {
       // From the stack frame metadata pointer, determine the start address of
       // the whole stack frame.
       let frame_byte_length = size_of::<ScopeStackFrame<D>>();
+      eprint!(" (frame len {}) ", frame_byte_length);
       let metadata_byte_length = size_of::<ScopeStackFrameMetadata>();
       let byte_offset_from_frame = frame_byte_length - metadata_byte_length;
       let frame_address = (metadata_ptr as usize) - byte_offset_from_frame;
@@ -1131,66 +1198,6 @@ mod internal {
   struct ScopeStackFrameMetadata {
     cleanup_fn:
       unsafe fn(*mut Self, &mut Isolate, &mut ActiveScopeData) -> usize,
-  }
-
-  #[repr(transparent)]
-  #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-  pub(super) struct ScopeCookie(u32);
-
-  impl ScopeCookie {
-    pub const NONE: Self = Self(0);
-    pub const BORROWED: Self = Self(!0);
-
-    // Methods for manipulating `ScopeStore::top_scope_cookie`.
-
-    #[inline(always)]
-    fn next(cell: &Cell<Self>) -> Self {
-      let cur_cookie = cell.get();
-      let next_cookie = Self(cur_cookie.0 + 1);
-      cell.set(next_cookie);
-      next_cookie
-    }
-
-    #[inline(always)]
-    fn revert(cell: &Cell<Self>) -> Self {
-      let cur_cookie = cell.get();
-      assert_ne!(cur_cookie, Self::default());
-      let old_cookie = Self(cur_cookie.0 - 1);
-      cell.set(old_cookie);
-      cur_cookie
-    }
-
-    #[inline(always)]
-    fn borrow(cell: &Cell<Self>, scope_cookie: Self) {
-      let cookie = cell.replace(Self::BORROWED);
-      assert_eq!(cookie, scope_cookie);
-    }
-
-    #[inline(always)]
-    fn unborrow(cell: &Cell<Self>, scope_cookie: Self) {
-      let borrowed_cookie = cell.replace(scope_cookie);
-      assert_eq!(borrowed_cookie, Self::BORROWED);
-    }
-
-    // Methods for manipulating `Scope::cookie`.
-
-    #[inline(always)]
-    fn set(&mut self, value: Self) {
-      let none_cookie = replace(self, value);
-      assert_eq!(none_cookie, Self::NONE)
-    }
-
-    #[inline(always)]
-    fn reset(&mut self, top_scope_cookie: Self) {
-      let cookie = replace(self, Self::NONE);
-      assert_eq!(cookie, top_scope_cookie);
-    }
-  }
-
-  impl Default for ScopeCookie {
-    fn default() -> Self {
-      Self::NONE
-    }
   }
 }
 

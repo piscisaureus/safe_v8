@@ -60,6 +60,7 @@ impl SnapshotCreator {
     &mut self,
     function_code_handling: FunctionCodeHandling,
   ) -> Option<StartupData> {
+    self.root_scope.unwind_to();
     let blob = unsafe {
       raw::v8__SnapshotCreator__CreateBlob(
         &mut self.raw,
