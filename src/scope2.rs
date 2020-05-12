@@ -42,7 +42,7 @@ impl<'a, Scope: ScopeParams> Ref<'a, Scope> {
     }
   }
 
-  pub fn enter(&mut self) -> &mut Scope {
+  pub fn enter(&'a mut self) -> &'a mut Scope {
     &mut self.scope
   }
 }

@@ -231,7 +231,7 @@ where
 {
   fn mapping() -> Self {
     let f = |info: *const FunctionCallbackInfo| {
-      let scope = &mut Scope::for_function_or_property_callback(info);
+      let mut scope = Scope::for_function_or_property_callback(info);
       let args = FunctionCallbackArguments::from_function_callback_info(info);
       let rv = ReturnValue::from_function_callback_info(info);
       (F::get())(scope.enter(), args, rv);
@@ -252,10 +252,11 @@ where
 {
   fn mapping() -> Self {
     let f = |key: Local<Name>, info: *const PropertyCallbackInfo| {
-      let scope = &mut Scope::for_function_or_property_callback(info);
+      let mut scope = Scope::for_function_or_property_callback(info);
+      let scope = scope.enter();
       let args = PropertyCallbackArguments::from_property_callback_info(info);
       let rv = ReturnValue::from_property_callback_info(info);
-      (F::get())(scope.enter(), key, args, rv);
+      (F::get())(scope, key, args, rv);
     };
     f.to_c_fn()
   }

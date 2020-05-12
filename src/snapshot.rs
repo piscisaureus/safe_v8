@@ -49,7 +49,7 @@ impl SnapshotCreator {
   /// global object template to create one, to be provided upon deserialization.
   pub fn set_default_context(&mut self, context: Global<Context>) {
     let raw = &mut self.raw as *mut _;
-    let scope = &mut HandleScope::new(self);
+    let mut scope = HandleScope::new(self);
     let scope = scope.enter();
     let context = context.get(scope).unwrap();
     unsafe { raw::v8__SnapshotCreator__SetDefaultContext(raw, &*context) };
