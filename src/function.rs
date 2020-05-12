@@ -234,7 +234,7 @@ where
       let scope = &mut Scope::for_function_or_property_callback(info);
       let args = FunctionCallbackArguments::from_function_callback_info(info);
       let rv = ReturnValue::from_function_callback_info(info);
-      (F::get())(scope, args, rv);
+      (F::get())(scope.enter(), args, rv);
     };
     f.to_c_fn()
   }
@@ -255,7 +255,7 @@ where
       let scope = &mut Scope::for_function_or_property_callback(info);
       let args = PropertyCallbackArguments::from_property_callback_info(info);
       let rv = ReturnValue::from_property_callback_info(info);
-      (F::get())(scope, key, args, rv);
+      (F::get())(scope.enter(), key, args, rv);
     };
     f.to_c_fn()
   }

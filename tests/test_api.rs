@@ -535,6 +535,7 @@ fn try_catch() {
     {
       // Error thrown - should be caught.
       let tc = &mut v8::TryCatch::new(scope);
+      let tc = tc.enter();
       let result = eval(tc, context, "throw new Error('foo')");
       assert!(result.is_none());
       assert!(tc.has_caught());
@@ -549,6 +550,7 @@ fn try_catch() {
     {
       // No error thrown.
       let tc = &mut v8::TryCatch::new(scope);
+      let tc = tc.enter();
       let result = eval(tc, context, "1 + 1");
       assert!(result.is_some());
       assert!(!tc.has_caught());
@@ -560,8 +562,10 @@ fn try_catch() {
     {
       // Rethrow and reset.
       let tc1 = &mut v8::TryCatch::new(scope);
+      let tc1 = tc1.enter();
       {
         let tc2 = &mut v8::TryCatch::new(tc1);
+        let tc2 = tc2.enter();
         eval(tc2, context, "throw 'bar'");
         assert!(tc2.has_caught());
         assert!(tc2.rethrow().is_some());
@@ -585,6 +589,7 @@ fn throw_exception() {
     let scope = cs.enter();
     {
       let tc = &mut v8::TryCatch::new(scope);
+      let tc = tc.enter();
       let exception = v8_str(tc, "boom");
       tc.isolate().throw_exception(exception.into());
       assert!(tc.has_caught());

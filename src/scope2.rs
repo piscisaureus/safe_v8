@@ -41,27 +41,16 @@ impl<'a, Scope: ScopeParams> Ref<'a, Scope> {
       _lifetime: PhantomData,
     }
   }
+
+  pub fn enter(&mut self) -> &mut Scope {
+    &mut self.scope
+  }
 }
 
 impl<'a, Scope: ScopeParams> Drop for Ref<'a, Scope> {
   #[inline(always)]
   fn drop(&mut self) {
     ScopeStore::drop_scope(&mut self.scope)
-  }
-}
-
-impl<'a, Scope: ScopeParams> Deref for Ref<'a, Scope> {
-  type Target = Scope;
-  #[inline(always)]
-  fn deref(&self) -> &Self::Target {
-    &self.scope
-  }
-}
-
-impl<'a, Scope: ScopeParams> DerefMut for Ref<'a, Scope> {
-  #[inline(always)]
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    &mut self.scope
   }
 }
 
