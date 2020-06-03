@@ -2,10 +2,10 @@
 use crate::isolate_create_params::raw;
 use crate::isolate_create_params::CreateParams;
 use crate::promise::PromiseRejectMessage;
+use crate::scope::ScopeData;
 use crate::support::Opaque;
 use crate::Context;
 use crate::Function;
-use crate::InIsolate;
 use crate::Local;
 use crate::Message;
 use crate::Module;
@@ -103,10 +103,6 @@ extern "C" {
     callback: InterruptCallback,
     data: *mut c_void,
   );
-  fn v8__Isolate__ThrowException(
-    isolate: *mut Isolate,
-    exception: *const Value,
-  ) -> *const Value;
   fn v8__Isolate__TerminateExecution(isolate: *const Isolate);
   fn v8__Isolate__IsExecutionTerminating(isolate: *const Isolate) -> bool;
   fn v8__Isolate__CancelTerminateExecution(isolate: *const Isolate);
@@ -187,21 +183,43 @@ impl Isolate {
   }
 
   /// Associate embedder-specific data with the isolate. |slot| has to be
-  /// between 0 and GetNumberOfDataSlots() - 1.
+  /// between 0 and GetNumberOfDataSlots() - 2.
   unsafe fn set_data(&mut self, slot: u32, ptr: *mut c_void) {
-    v8__Isolate__SetData(self, slot + 1, ptr)
+    v8__Isolate__SetData(self, slot + 2, ptr)
   }
 
   /// Retrieve embedder-specific data from the isolate.
   /// Returns NULL if SetData has never been called for the given |slot|.
   fn get_data(&self, slot: u32) -> *mut c_void {
-    unsafe { v8__Isolate__GetData(self, slot + 1) }
+    unsafe { v8__Isolate__GetData(self, slot + 2) }
   }
 
   /// Returns the maximum number of available embedder data slots. Valid slots
-  /// are in the range of 0 - GetNumberOfDataSlots() - 1.
+  /// are in the range of 0 - GetNumberOfDataSlots() - 2.
   fn get_number_of_data_slots(&self) -> u32 {
-    unsafe { v8__Isolate__GetNumberOfDataSlots(self) - 1 }
+    unsafe { v8__Isolate__GetNumberOfDataSlots(self) - 2 }
+  }
+
+  /// Get a raw reference to the most recently entered scope.
+  pub(crate) fn get_current_scope(&self) -> Option<NonNull<ScopeData>> {
+    unsafe { NonNull::new(v8__Isolate__GetData(self, 1) as *mut ScopeData) }
+  }
+
+  /// Updates the most recently entered scope.
+  pub(crate) fn set_current_scope(
+    &mut self,
+    current_scope: Option<NonNull<ScopeData>>,
+  ) {
+    let data =
+      current_scope.map(NonNull::as_ptr).unwrap_or_else(null_mut) as *mut _;
+    unsafe { v8__Isolate__SetData(self, 1, data) }
+  }
+
+  /// Resets the scope stack, popping any remaining scopes that are no longer
+  /// in use but which have not yet been cleaned up. Note that calling this
+  /// function while a scope is active causes a panic.
+  pub(crate) fn reset_scopes(&mut self) {
+    ScopeData::reset(self)
   }
 
   /// Get mutable reference to embedder data.
@@ -316,24 +334,6 @@ impl Isolate {
     }
   }
 
-  /// Schedules an exception to be thrown when returning to JavaScript. When an
-  /// exception has been scheduled it is illegal to invoke any JavaScript
-  /// operation; the caller must return immediately and only after the exception
-  /// has been handled does it become legal to invoke JavaScript operations.
-  ///
-  /// This function always returns the `undefined` value.
-  pub fn throw_exception(
-    &mut self,
-    exception: Local<Value>,
-  ) -> Local<'_, Value> {
-    let result = unsafe {
-      Local::from_raw(v8__Isolate__ThrowException(self, &*exception))
-    }
-    .unwrap();
-    debug_assert!(result.is_undefined());
-    result
-  }
-
   /// Runs the default MicrotaskQueue until it gets empty.
   /// Any exceptions thrown by microtask callbacks are swallowed.
   pub fn run_microtasks(&mut self) {
@@ -404,8 +404,8 @@ pub(crate) struct IsolateAnnex {
   create_param_allocations: Box<dyn Any>,
   slots: HashMap<TypeId, RefCell<Box<dyn Any>>>,
   // The `isolate` and `isolate_mutex` fields are there so an `IsolateHandle`
-  // (which may outlive the isolate itself) can determine whether the isolate is
-  // still alive, and if so, get a reference to it. Safety rules:
+  // (which may outlive the isolate itself) can determine whether the isolate
+  // is still alive, and if so, get a reference to it. Safety rules:
   // - The 'main thread' must lock the mutex and reset `isolate` to null just
   //   before the isolate is disposed.
   // - Any other thread must lock the mutex while it's reading/using the
@@ -546,16 +546,15 @@ impl OwnedIsolate {
     let cxx_isolate = NonNull::new(cxx_isolate).unwrap();
     Self { cxx_isolate }
   }
-}
 
-impl InIsolate for OwnedIsolate {
-  fn isolate(&mut self) -> &mut Isolate {
-    self.deref_mut()
+  pub(crate) fn get_isolate_ptr(&self) -> *mut Isolate {
+    self.cxx_isolate.as_ptr()
   }
 }
 
 impl Drop for OwnedIsolate {
   fn drop(&mut self) {
+    self.reset_scopes();
     unsafe { self.cxx_isolate.as_mut().dispose() }
   }
 }

@@ -5,12 +5,12 @@ use crate::support::MaybeBool;
 use crate::AccessorNameGetterCallback;
 use crate::Array;
 use crate::Context;
+use crate::HandleScope;
 use crate::Local;
 use crate::Map;
 use crate::Name;
 use crate::Object;
 use crate::PropertyAttribute;
-use crate::ToLocal;
 use crate::Value;
 
 extern "C" {
@@ -93,8 +93,11 @@ extern "C" {
 
 impl Object {
   /// Creates an empty object.
-  pub fn new<'sc>(scope: &mut impl ToLocal<'sc>) -> Local<'sc, Object> {
-    unsafe { scope.to_local(|scope| v8__Object__New(scope.isolate())) }.unwrap()
+  pub fn new<'s>(scope: &mut HandleScope<'s>) -> Local<'s, Object> {
+    unsafe {
+      scope.cast_local(|scope| v8__Object__New(scope.get_isolate_ptr()))
+    }
+    .unwrap()
   }
 
   /// Creates a JavaScript object with the given properties, and the given
@@ -102,19 +105,19 @@ impl Object {
   /// the newly created object won't have a prototype at all). This is similar
   /// to Object.create(). All properties will be created as enumerable,
   /// configurable and writable properties.
-  pub fn with_prototype_and_properties<'sc>(
-    scope: &mut impl ToLocal<'sc>,
-    prototype_or_null: Local<'sc, Value>,
+  pub fn with_prototype_and_properties<'s>(
+    scope: &mut HandleScope<'s>,
+    prototype_or_null: Local<'s, Value>,
     names: &[Local<Name>],
     values: &[Local<Value>],
-  ) -> Local<'sc, Object> {
+  ) -> Local<'s, Object> {
     assert_eq!(names.len(), values.len());
     let names = Local::slice_into_raw(names);
     let values = Local::slice_into_raw(values);
     unsafe {
-      scope.to_local(|scope| {
+      scope.cast_local(|scope| {
         v8__Object__New__with_prototype_and_properties(
-          scope.isolate(),
+          scope.get_isolate_ptr(),
           &*prototype_or_null,
           names.as_ptr(),
           values.as_ptr(),
@@ -193,31 +196,33 @@ impl Object {
     .into()
   }
 
-  pub fn get<'a>(
+  pub fn get<'s>(
     &self,
-    scope: &mut impl ToLocal<'a>,
+    scope: &mut HandleScope<'s>,
     context: Local<Context>,
     key: Local<Value>,
-  ) -> Option<Local<'a, Value>> {
-    unsafe { scope.to_local(|_| v8__Object__Get(self, &*context, &*key)) }
+  ) -> Option<Local<'s, Value>> {
+    unsafe { scope.cast_local(|_| v8__Object__Get(self, &*context, &*key)) }
   }
 
-  pub fn get_index<'a>(
+  pub fn get_index<'s>(
     &self,
-    scope: &mut impl ToLocal<'a>,
+    scope: &mut HandleScope<'s>,
     context: Local<Context>,
     index: u32,
-  ) -> Option<Local<'a, Value>> {
-    unsafe { scope.to_local(|_| v8__Object__GetIndex(self, &*context, index)) }
+  ) -> Option<Local<'s, Value>> {
+    unsafe {
+      scope.cast_local(|_| v8__Object__GetIndex(self, &*context, index))
+    }
   }
 
   /// Get the prototype object. This does not skip objects marked to be
   /// skipped by proto and it does not consult the security handler.
-  pub fn get_prototype<'a>(
+  pub fn get_prototype<'s>(
     &self,
-    scope: &mut impl ToLocal<'a>,
-  ) -> Option<Local<'a, Value>> {
-    unsafe { scope.to_local(|_| v8__Object__GetPrototype(self)) }
+    scope: &mut HandleScope<'s>,
+  ) -> Option<Local<'s, Value>> {
+    unsafe { scope.cast_local(|_| v8__Object__GetPrototype(self)) }
   }
 
   /// Note: SideEffectType affects the getter only, not the setter.
@@ -243,23 +248,23 @@ impl Object {
   }
 
   /// Returns the context in which the object was created.
-  pub fn creation_context<'a>(
+  pub fn creation_context<'s>(
     &self,
-    scope: &mut impl ToLocal<'a>,
-  ) -> Local<'a, Context> {
-    unsafe { scope.to_local(|_| v8__Object__CreationContext(self)) }.unwrap()
+    scope: &mut HandleScope<'s>,
+  ) -> Local<'s, Context> {
+    unsafe { scope.cast_local(|_| v8__Object__CreationContext(self)) }.unwrap()
   }
 
   /// This function has the same functionality as GetPropertyNames but the
   /// returned array doesn't contain the names of properties from prototype
   /// objects.
-  pub fn get_own_property_names<'sc>(
+  pub fn get_own_property_names<'s>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'s>,
     context: Local<Context>,
-  ) -> Option<Local<'sc, Array>> {
+  ) -> Option<Local<'s, Array>> {
     unsafe {
-      scope.to_local(|_| v8__Object__GetOwnPropertyNames(self, &*context))
+      scope.cast_local(|_| v8__Object__GetOwnPropertyNames(self, &*context))
     }
   }
 
@@ -267,39 +272,41 @@ impl Object {
   /// object, including properties from prototype objects. The array returned by
   /// this method contains the same values as would be enumerated by a for-in
   /// statement over this object.
-  pub fn get_property_names<'sc>(
+  pub fn get_property_names<'s>(
     &self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'s>,
     context: Local<Context>,
-  ) -> Option<Local<'sc, Array>> {
-    unsafe { scope.to_local(|_| v8__Object__GetPropertyNames(self, &*context)) }
+  ) -> Option<Local<'s, Array>> {
+    unsafe {
+      scope.cast_local(|_| v8__Object__GetPropertyNames(self, &*context))
+    }
   }
 }
 
 impl Array {
   /// Creates a JavaScript array with the given length. If the length
   /// is negative the returned array will have length 0.
-  pub fn new<'sc>(
-    scope: &mut impl ToLocal<'sc>,
-    length: i32,
-  ) -> Local<'sc, Array> {
-    unsafe { scope.to_local(|scope| v8__Array__New(scope.isolate(), length)) }
-      .unwrap()
+  pub fn new<'s>(scope: &mut HandleScope<'s>, length: i32) -> Local<'s, Array> {
+    unsafe {
+      scope.cast_local(|scope| v8__Array__New(scope.get_isolate_ptr(), length))
+    }
+    .unwrap()
   }
 
-  /// Creates a JavaScript array out of a Local<Value> array with a known length.
-  pub fn new_with_elements<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+  /// Creates a JavaScript array out of a Local<Value> array with a known
+  /// length.
+  pub fn new_with_elements<'s>(
+    scope: &mut HandleScope<'s>,
     elements: &[Local<Value>],
-  ) -> Local<'sc, Array> {
+  ) -> Local<'s, Array> {
     if elements.is_empty() {
       return Self::new(scope, 0);
     }
     let elements = Local::slice_into_raw(elements);
     unsafe {
-      scope.to_local(|scope| {
+      scope.cast_local(|scope| {
         v8__Array__New_with_elements(
-          scope.isolate(),
+          scope.get_isolate_ptr(),
           elements.as_ptr(),
           elements.len(),
         )
@@ -319,10 +326,7 @@ impl Map {
   }
   /// Returns an array of length size() * 2, where index N is the Nth key and
   /// index N + 1 is the Nth value.
-  pub fn as_array<'sc>(
-    &self,
-    scope: &mut impl ToLocal<'sc>,
-  ) -> Local<'sc, Array> {
-    unsafe { scope.to_local(|_| v8__Map__As__Array(self)) }.unwrap()
+  pub fn as_array<'s>(&self, scope: &mut HandleScope<'s>) -> Local<'s, Array> {
+    unsafe { scope.cast_local(|_| v8__Map__As__Array(self)) }.unwrap()
   }
 }
