@@ -94,6 +94,7 @@ mod primitives;
 mod promise;
 mod property_attribute;
 mod proxy;
+mod scope2;
 mod scope_traits;
 mod script;
 mod script_or_module;

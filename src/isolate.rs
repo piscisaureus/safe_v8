@@ -2,6 +2,7 @@
 use crate::isolate_create_params::raw;
 use crate::isolate_create_params::CreateParams;
 use crate::promise::PromiseRejectMessage;
+use crate::scope2::data::ScopeState;
 use crate::support::Opaque;
 use crate::Context;
 use crate::Function;
@@ -187,21 +188,36 @@ impl Isolate {
   }
 
   /// Associate embedder-specific data with the isolate. |slot| has to be
-  /// between 0 and GetNumberOfDataSlots() - 1.
+  /// between 0 and GetNumberOfDataSlots() - 2.
   unsafe fn set_data(&mut self, slot: u32, ptr: *mut c_void) {
-    v8__Isolate__SetData(self, slot + 1, ptr)
+    v8__Isolate__SetData(self, slot + 2, ptr)
   }
 
   /// Retrieve embedder-specific data from the isolate.
   /// Returns NULL if SetData has never been called for the given |slot|.
   fn get_data(&self, slot: u32) -> *mut c_void {
-    unsafe { v8__Isolate__GetData(self, slot + 1) }
+    unsafe { v8__Isolate__GetData(self, slot + 2) }
   }
 
   /// Returns the maximum number of available embedder data slots. Valid slots
-  /// are in the range of 0 - GetNumberOfDataSlots() - 1.
+  /// are in the range of 0 - GetNumberOfDataSlots() - 2.
   fn get_number_of_data_slots(&self) -> u32 {
-    unsafe { v8__Isolate__GetNumberOfDataSlots(self) - 1 }
+    unsafe { v8__Isolate__GetNumberOfDataSlots(self) - 2 }
+  }
+
+  /// Get a raw reference to the most recently entered scope.
+  pub(crate) fn get_current_scope(&self) -> Option<NonNull<ScopeState>> {
+    unsafe { NonNull::new(v8__Isolate__GetData(self, 1) as *mut ScopeState) }
+  }
+
+  /// Updates the most recently entered scope.
+  pub(crate) fn set_current_scope(
+    &mut self,
+    current_scope: Option<NonNull<ScopeState>>,
+  ) {
+    let data =
+      current_scope.map(NonNull::as_ptr).unwrap_or_else(null_mut) as *mut _;
+    unsafe { v8__Isolate__SetData(self, 2, data) }
   }
 
   /// Get mutable reference to embedder data.
