@@ -2,7 +2,11 @@ use std::any::Any;
 use std::cell::Cell;
 use std::marker::PhantomData;
 use std::mem::replace;
+use std::mem::size_of;
 use std::mem::MaybeUninit;
+use std::ops::Deref;
+use std::ops::DerefMut;
+use std::ptr;
 use std::ptr::NonNull;
 
 use crate::isolate::IsolateAnnex;
@@ -19,24 +23,154 @@ use crate::Value;
 pub(self) mod reference {
   use super::*;
 
-  pub struct ContextScope<'a, P> {
-    scope_state: NonNull<data::ScopeState>,
-    _phantom: PhantomData<&'a mut P>,
+  pub unsafe trait Scope: Sized {
+    fn from_scope_state(scope_state: &mut NonNull<data::ScopeState>) -> Self {
+      assert_eq!(size_of::<Self>(), size_of::<NonNull<data::ScopeState>>());
+      let mut scope_state = *scope_state;
+      unsafe { ptr::read(&mut scope_state as *mut _ as *mut Self) }
+    }
+    fn get_scope_state(&mut self) -> &mut NonNull<data::ScopeState> {
+      assert_eq!(size_of::<Self>(), size_of::<NonNull<data::ScopeState>>());
+      unsafe { &mut *(self as *mut _ as *mut NonNull<_>) }
+    }
   }
-  pub struct HandleScope<'a, P> {
-    scope_state: NonNull<data::ScopeState>,
-    _phantom: PhantomData<&'a mut P>,
+
+  unsafe impl<S: Scope> Scope for &S {
+    fn from_scope_state(scope_state: &mut NonNull<data::ScopeState>) -> Self {
+      assert_eq!(size_of::<S>(), size_of::<NonNull<data::ScopeState>>());
+      unsafe { &*(scope_state as *const _ as *const Self) }
+    }
+    fn get_scope_state(&mut self) -> &mut NonNull<data::ScopeState> {
+      assert_eq!(size_of::<S>(), size_of::<NonNull<data::ScopeState>>());
+      unsafe { &mut *(self as *mut Self as *mut NonNull<_>) }
+    }
   }
-  pub struct EscapableHandleScope<'a, 'b: 'a> {
-    scope_state: NonNull<data::ScopeState>,
-    _phantom: PhantomData<(&'a mut raw::HandleScope, &'b raw::EscapeSlot)>,
+
+  unsafe impl<S: Scope> Scope for &mut S {
+    fn from_scope_state(scope_state: &mut NonNull<data::ScopeState>) -> Self {
+      assert_eq!(size_of::<S>(), size_of::<NonNull<data::ScopeState>>());
+      unsafe { &mut *(scope_state as *mut _ as *mut Self) }
+    }
+    fn get_scope_state(&mut self) -> &mut NonNull<data::ScopeState> {
+      (**self).get_scope_state()
+    }
   }
+
+  pub struct ContextScope<'s, P> {
+    scope_state: NonNull<data::ScopeState>,
+    _phantom: PhantomData<&'s mut P>,
+  }
+
+  unsafe impl<'s, P> Scope for ContextScope<'s, P> {}
+
+  impl<'s, P: Scope> Deref for ContextScope<'s, P> {
+    type Target = P;
+    fn deref(mut self: &Self) -> &Self::Target {
+      Scope::from_scope_state(self.get_scope_state())
+    }
+  }
+
+  impl<'s, P: Scope> DerefMut for ContextScope<'s, P> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+      Scope::from_scope_state(self.get_scope_state())
+    }
+  }
+
+  impl<'s, P> Drop for ContextScope<'s, P> {
+    fn drop(&mut self) {}
+  }
+
+  impl<'s, P> ContextScope<'s, P>
+  where
+    P: NewContextScopeParam<'s>,
+  {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(mut param: P, context: Local<Context>) -> P::NewScope {
+      let old_state = data::ScopeState::get_mut(param.get_scope_state());
+      let isolate = old_state.get_isolate_mut();
+      let mut new_state = data::ScopeState::new_context_scope(isolate, context);
+      Scope::from_scope_state(&mut new_state)
+    }
+  }
+
+  pub trait NewContextScopeParam<'s>: Scope {
+    type NewScope: Scope;
+  }
+
+  impl<'s, 'p: 's, P: Scope> NewContextScopeParam<'s>
+    for &'s mut ContextScope<'p, P>
+  {
+    type NewScope = P;
+  }
+
+  impl<'s, 'p: 's, P> NewContextScopeParam<'s> for &'s mut HandleScope<'p, P> {
+    type NewScope = ContextScope<'s, HandleScope<'p>>;
+  }
+
+  impl<'s, 'p: 's, 'e: 'p> NewContextScopeParam<'s>
+    for &'s mut EscapableHandleScope<'p, 'e>
+  {
+    type NewScope = ContextScope<'s, EscapableHandleScope<'p, 'e>>;
+  }
+
+  pub struct HandleScope<'s, P = Context> {
+    scope_state: NonNull<data::ScopeState>,
+    _phantom: PhantomData<&'s mut P>,
+  }
+
+  unsafe impl<'s, P> Scope for HandleScope<'s, P> {}
+
+  impl<'s, P> Drop for HandleScope<'s, P> {
+    fn drop(&mut self) {}
+  }
+
+  impl<'s, P> HandleScope<'s, P>
+  where
+    P: NewHandleScopeParam<'s>,
+  {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(mut param: P) -> P::NewScope {
+      let old_state = data::ScopeState::get_mut(param.get_scope_state());
+      let isolate = old_state.get_isolate_mut();
+      let mut new_state = data::ScopeState::new_handle_scope(isolate);
+      Scope::from_scope_state(&mut new_state)
+    }
+  }
+
+  /************* WIP: HERE *************/
+
+  pub trait NewHandleScopeParam<'s>: Scope {
+    type NewScope: Scope;
+  }
+
+  impl<'s, 'p: 's, P: NewHandleScopeParam<'s>> NewHandleScopeParam<'s>
+    for &'s mut ContextScope<'p, P>
+  {
+    type NewScope = P;
+  }
+
+  impl<'s, 'p: 's, P> NewHandleScopeParam<'s> for &'s mut HandleScope<'p, P> {
+    type NewScope = ContextScope<'s, HandleScope<'p>>;
+  }
+
+  impl<'s, 'p: 's, 'e: 'p> NewHandleScopeParam<'s>
+    for &'s mut EscapableHandleScope<'p, 'e>
+  {
+    type NewScope = ContextScope<'s, EscapableHandleScope<'p, 'e>>;
+  }
+
+  pub struct EscapableHandleScope<'s, 'e: 's> {
+    scope_state: NonNull<data::ScopeState>,
+    _phantom: PhantomData<(&'s mut raw::HandleScope, &'e raw::EscapeSlot)>,
+  }
+
+  unsafe impl<'s, 'e: 's> Scope for EscapableHandleScope<'s, 'e> {}
 }
 
 pub(crate) mod data {
   use super::*;
 
-  pub(crate) struct ScopeState {
+  pub struct ScopeState {
     pub(super) isolate: NonNull<Isolate>,
     pub(super) context: Option<NonNull<Context>>,
     pub(super) escape_slot: Option<NonNull<raw::EscapeSlot>>,
@@ -47,7 +181,11 @@ pub(crate) mod data {
   impl ScopeState {
     // TODO(piscisaureus): use something more efficient than a separate heap
     // allocation for every scope.
-    fn new_common(isolate: &mut Isolate, data: ScopeData) -> Box<Self> {
+    fn new_with<F>(isolate: &mut Isolate, init_fn: F) -> NonNull<Self>
+    where
+      F: FnOnce(&mut Self),
+    {
+      let isolate_nn = unsafe { NonNull::new_unchecked(isolate) };
       let mut parent = isolate.get_current_scope();
       let context = parent
         .as_mut()
@@ -60,50 +198,77 @@ pub(crate) mod data {
         .and_then(|p| p.escape_slot)
         .map(NonNull::from);
       let state = Self {
-        isolate: NonNull::from(isolate),
+        isolate: isolate_nn,
         parent,
         context,
         escape_slot,
-        data,
+        data: Default::default(),
       };
-      Box::new(state)
+      let mut state_box = Box::new(state);
+      (init_fn)(&mut *state_box);
+      let state_ptr = Box::into_raw(state_box);
+      let state_nn = unsafe { NonNull::new_unchecked(state_ptr) };
+      isolate.set_current_scope(Some(state_nn));
+      state_nn
     }
 
     pub(super) fn new_context_scope(
       isolate: &mut Isolate,
       context: Local<Context>,
-    ) -> Box<Self> {
-      let mut state = Self::new_common(isolate, ScopeData::Context);
-      state.context = NonNull::new(&*context as *const Context as *mut Context);
-      state
+    ) -> NonNull<Self> {
+      Self::new_with(isolate, |state| {
+        state.context =
+          NonNull::new(&*context as *const Context as *mut Context);
+      })
     }
 
-    pub(super) fn new_handle_scope(isolate: &mut Isolate) -> Box<Self> {
-      let mut state = Self::new_common(
-        isolate,
-        ScopeData::HandleScope(raw::HandleScope::uninit()),
-      );
-      match &mut state.data {
-        ScopeData::HandleScope(raw) => raw.init(isolate),
-        _ => unreachable!(),
-      };
-      state
+    pub(super) fn new_handle_scope(isolate: &mut Isolate) -> NonNull<Self> {
+      Self::new_with(isolate, |state| {
+        state.data = ScopeData::HandleScope(raw::HandleScope::uninit());
+        match &mut state.data {
+          ScopeData::HandleScope(raw) => raw.init(state.isolate.as_ptr()),
+          _ => unreachable!(),
+        }
+      })
     }
 
     pub(super) fn new_escapable_handle_scope(
       isolate: &mut Isolate,
-    ) -> Box<Self> {
-      let mut state = Self::new_common(
-        isolate,
-        ScopeData::EscapableHandleScope(raw::EscapableHandleScope::uninit()),
-      );
-      match &mut state.data {
-        ScopeData::EscapableHandleScope(raw) => {
-          state.escape_slot = raw.init(isolate);
+    ) -> NonNull<Self> {
+      Self::new_with(isolate, |state| {
+        state.data =
+          ScopeData::EscapableHandleScope(raw::EscapableHandleScope::uninit());
+        match &mut state.data {
+          ScopeData::EscapableHandleScope(raw) => {
+            state.escape_slot = raw.init(state.isolate.as_ptr());
+          }
+          _ => unreachable!(),
         }
-        _ => unreachable!(),
-      };
-      state
+      })
+    }
+
+    fn check_current(self_nn: NonNull<Self>) {
+      let current_scope_nn =
+        unsafe { self_nn.as_ref().get_isolate().get_current_scope() };
+      assert_eq!(Some(self_nn), current_scope_nn);
+    }
+
+    pub(super) fn get<'a>(self_nn: &'a NonNull<Self>) -> &'a Self {
+      Self::check_current(*self_nn);
+      unsafe { self_nn.as_ref() }
+    }
+
+    pub(super) fn get_mut<'a>(self_nn: &'a mut NonNull<Self>) -> &'a mut Self {
+      Self::check_current(*self_nn);
+      unsafe { self_nn.as_mut() }
+    }
+
+    pub(super) fn get_isolate(&self) -> &Isolate {
+      unsafe { self.isolate.as_ref() }
+    }
+
+    pub(super) fn get_isolate_mut(&mut self) -> &mut Isolate {
+      unsafe { self.isolate.as_mut() }
     }
   }
 
