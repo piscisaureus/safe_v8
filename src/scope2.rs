@@ -16,9 +16,13 @@ use crate::Data;
 use crate::Isolate;
 use crate::Local;
 use crate::Message;
+use crate::OwnedIsolate;
 use crate::Primitive;
 use crate::TryCatch;
 use crate::Value;
+
+#[doc(inline)]
+pub use reference::{ContextScope, EscapableHandleScope, HandleScope};
 
 pub(self) mod reference {
   use super::*;
@@ -100,7 +104,7 @@ pub(self) mod reference {
   impl<'s, 'p: 's, P: Scope> NewContextScopeParam<'s>
     for &'s mut ContextScope<'p, P>
   {
-    type NewScope = P;
+    type NewScope = ContextScope<'s, P>;
   }
 
   impl<'s, 'p: 's, P> NewContextScopeParam<'s> for &'s mut HandleScope<'p, P> {
@@ -118,46 +122,85 @@ pub(self) mod reference {
     _phantom: PhantomData<&'s mut P>,
   }
 
+  impl<'s> HandleScope<'s, ()> {
+    pub fn add_local<T>(&'_ mut self) -> Local<'s, T>
+    where
+      Local<'s, T>: Into<Local<'s, Context>>,
+    {
+      unimplemented!()
+    }
+  }
+
+  impl<'s> HandleScope<'s> {
+    pub fn add_local<T>(&'_ mut self) -> Local<'s, T> {
+      unimplemented!()
+    }
+  }
+
   unsafe impl<'s, P> Scope for HandleScope<'s, P> {}
 
   impl<'s, P> Drop for HandleScope<'s, P> {
     fn drop(&mut self) {}
   }
 
-  impl<'s, P> HandleScope<'s, P>
-  where
-    P: NewHandleScopeParam<'s>,
-  {
+  impl<'s> HandleScope<'s> {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(mut param: P) -> P::NewScope {
-      let old_state = data::ScopeState::get_mut(param.get_scope_state());
-      let isolate = old_state.get_isolate_mut();
+    pub fn new<P>(param: P) -> P::NewScope
+    where
+      P: NewHandleScopeParam<'s>,
+    {
+      let isolate = param.get_isolate_mut();
       let mut new_state = data::ScopeState::new_handle_scope(isolate);
       Scope::from_scope_state(&mut new_state)
     }
   }
 
-  /************* WIP: HERE *************/
-
-  pub trait NewHandleScopeParam<'s>: Scope {
+  pub trait NewHandleScopeParam<'s> {
     type NewScope: Scope;
+    fn get_isolate_mut(self) -> &'s mut Isolate;
   }
 
-  impl<'s, 'p: 's, P: NewHandleScopeParam<'s>> NewHandleScopeParam<'s>
-    for &'s mut ContextScope<'p, P>
+  impl<'s> NewHandleScopeParam<'s> for &'s mut OwnedIsolate {
+    type NewScope = HandleScope<'s, ()>;
+    fn get_isolate_mut(self) -> &'s mut Isolate {
+      &mut *self
+    }
+  }
+
+  impl<'s, 'p: 's, P> NewHandleScopeParam<'s> for &'s mut ContextScope<'p, P>
+  where
+    &'s mut P: Scope + NewHandleScopeParam<'s>,
   {
-    type NewScope = P;
+    type NewScope = <&'s mut P as NewHandleScopeParam<'s>>::NewScope;
+    fn get_isolate_mut(self) -> &'s mut Isolate {
+      data::ScopeState::get_mut(self.get_scope_state()).get_isolate_mut()
+    }
   }
 
-  impl<'s, 'p: 's, P> NewHandleScopeParam<'s> for &'s mut HandleScope<'p, P> {
-    type NewScope = ContextScope<'s, HandleScope<'p>>;
+  impl<'s, 'p: 's> NewHandleScopeParam<'s> for &'s mut HandleScope<'p, ()> {
+    type NewScope = HandleScope<'s, ()>;
+    fn get_isolate_mut(self) -> &'s mut Isolate {
+      data::ScopeState::get_mut(self.get_scope_state()).get_isolate_mut()
+    }
+  }
+
+  impl<'s, 'p: 's> NewHandleScopeParam<'s> for &'s mut HandleScope<'p> {
+    type NewScope = HandleScope<'s>;
+    fn get_isolate_mut(self) -> &'s mut Isolate {
+      data::ScopeState::get_mut(self.get_scope_state()).get_isolate_mut()
+    }
   }
 
   impl<'s, 'p: 's, 'e: 'p> NewHandleScopeParam<'s>
     for &'s mut EscapableHandleScope<'p, 'e>
   {
-    type NewScope = ContextScope<'s, EscapableHandleScope<'p, 'e>>;
+    type NewScope = EscapableHandleScope<'s, 'e>;
+    fn get_isolate_mut(self) -> &'s mut Isolate {
+      data::ScopeState::get_mut(self.get_scope_state()).get_isolate_mut()
+    }
   }
+
+  /************* WIP: HERE *************/
 
   pub struct EscapableHandleScope<'s, 'e: 's> {
     scope_state: NonNull<data::ScopeState>,
@@ -165,6 +208,70 @@ pub(self) mod reference {
   }
 
   unsafe impl<'s, 'e: 's> Scope for EscapableHandleScope<'s, 'e> {}
+
+  impl<'s, 'e: 's> Deref for EscapableHandleScope<'s, 'e> {
+    type Target = HandleScope<'s>;
+    fn deref(mut self: &Self) -> &Self::Target {
+      Scope::from_scope_state(self.get_scope_state())
+    }
+  }
+
+  impl<'s, 'e: 's> DerefMut for EscapableHandleScope<'s, 'e> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+      Scope::from_scope_state(self.get_scope_state())
+    }
+  }
+
+  impl<'s, 'e: 's> Drop for EscapableHandleScope<'s, 'e> {
+    fn drop(&mut self) {}
+  }
+
+  impl<'s, 'e: 's> EscapableHandleScope<'s, 'e> {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new<P>(param: P) -> P::NewScope
+    where
+      P: NewEscapableHandleScopeParam<'s, 'e>,
+    {
+      let isolate = param.get_isolate_mut();
+      let mut new_state = data::ScopeState::new_escapable_handle_scope(isolate);
+      Scope::from_scope_state(&mut new_state)
+    }
+  }
+
+  pub trait NewEscapableHandleScopeParam<'s, 'e: 's>: Scope {
+    type NewScope: Scope;
+    fn get_isolate_mut(self) -> &'s mut Isolate;
+  }
+
+  impl<'s, 'p: 's, 'e: 'p, P> NewEscapableHandleScopeParam<'s, 'e>
+    for &'s mut ContextScope<'p, P>
+  where
+    &'s mut P: Scope + NewEscapableHandleScopeParam<'s, 'e>,
+  {
+    type NewScope =
+      <&'s mut P as NewEscapableHandleScopeParam<'s, 'e>>::NewScope;
+    fn get_isolate_mut(self) -> &'s mut Isolate {
+      data::ScopeState::get_mut(self.get_scope_state()).get_isolate_mut()
+    }
+  }
+
+  impl<'s, 'p: 's> NewEscapableHandleScopeParam<'s, 'p>
+    for &'s mut HandleScope<'p>
+  {
+    type NewScope = EscapableHandleScope<'s, 'p>;
+    fn get_isolate_mut(self) -> &'s mut Isolate {
+      data::ScopeState::get_mut(self.get_scope_state()).get_isolate_mut()
+    }
+  }
+
+  impl<'s, 'p: 's, 'e: 'p> NewEscapableHandleScopeParam<'s, 'p>
+    for &'s mut EscapableHandleScope<'p, 'e>
+  {
+    type NewScope = EscapableHandleScope<'s, 'p>;
+    fn get_isolate_mut(self) -> &'s mut Isolate {
+      data::ScopeState::get_mut(self.get_scope_state()).get_isolate_mut()
+    }
+  }
 }
 
 pub(crate) mod data {
@@ -436,5 +543,34 @@ mod raw_unused {
       this: *mut EscapableHandleScope,
       value: *const Data,
     ) -> *const Data;
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn test_scope(owned_isolate: &mut OwnedIsolate) {
+    let mut h = HandleScope::new(owned_isolate);
+    let context = h.add_local::<Context>();
+    let mut h = HandleScope::new(&mut h);
+    let mut h = ContextScope::new(&mut h, context);
+    let mut h = ContextScope::new(&mut h, context);
+    let mut h = HandleScope::new(&mut h);
+    let l1 = h.add_local::<Value>();
+    let l2 = h.add_local::<Value>();
+    let mut hx = EscapableHandleScope::new(&mut h);
+    l1;
+    l2;
+    let _lr = {
+      let mut h = HandleScope::new(&mut hx);
+      let l3 = h.add_local::<Value>();
+      l3
+    };
+    let l4 = hx.add_local::<Value>();
+    //_lr;
+    //let mut h = ContextScope::new(&mut h, context);
+
+    // /hx;
   }
 }
