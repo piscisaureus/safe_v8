@@ -4,6 +4,7 @@ use std::mem::replace;
 use std::mem::size_of;
 use std::mem::transmute_copy;
 use std::mem::MaybeUninit;
+use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::ptr::null;
@@ -221,6 +222,20 @@ pub(self) mod reference {
   pub struct EscapableHandleScope<'s, 'e: 's> {
     scope_state: NonNull<data::ScopeState>,
     _phantom: PhantomData<(&'s mut raw::HandleScope, &'e raw::EscapeSlot)>,
+  }
+
+  impl<'s, 'e: 's> EscapableHandleScope<'s, 'e> {
+    /// Pushes the value into the previous scope and returns a handle to it.
+    /// Cannot be called twice.
+    pub fn escape<T>(&mut self, value: Local<T>) -> Local<'e, T> {
+      let mut escape_slot_nn = data::ScopeState::get_mut(self)
+        .escape_slot
+        .expect("internal error: EscapableHandleScope has no escape slot");
+      let escape_slot = unsafe { escape_slot_nn.as_mut() };
+      let value_raw: *const T = &*value;
+      let escaped_value_raw = escape_slot.escape(value_raw);
+      unsafe { Local::from_raw(escaped_value_raw) }.unwrap()
+    }
   }
 
   unsafe impl<'s, 'e: 's> Scope for EscapableHandleScope<'s, 'e> {}
@@ -471,9 +486,9 @@ mod raw {
 
   #[derive(Clone, Copy)]
   #[repr(transparent)]
-  pub(super) struct Address(usize);
+  pub(super) struct Address(NonZeroUsize);
 
-  #[derive(Debug, Eq, PartialEq)]
+  #[derive(Debug)]
   pub(super) struct ContextScope {
     entered_context: *const Context,
   }
@@ -500,7 +515,7 @@ mod raw {
   }
 
   #[repr(C)]
-  #[derive(Debug, Eq, PartialEq)]
+  #[derive(Debug)]
   pub(super) struct HandleScope {
     isolate_: *mut Isolate,
     prev_next_: *mut Address,
@@ -538,11 +553,27 @@ mod raw {
       unsafe {
         let undefined = v8__Undefined(isolate) as *const Data;
         let local = v8__Local__New(isolate, undefined);
-        let address = &*local as *const _ as *mut raw::Address;
-        let slot = NonNull::new_unchecked(address);
+        let address_ptr =
+          &*local as *const Data as *mut Data as *mut raw::Address;
+        let slot = NonNull::new_unchecked(address_ptr);
         let uninit_slot = self.0.replace(slot);
         debug_assert!(uninit_slot.is_none());
       }
+    }
+
+    pub(super) fn escape<T>(&mut self, value: *const T) -> *const T {
+      let mut slot_address_nn = self
+        .0
+        .take()
+        .expect("EscapableHandleScope::escape() called twice");
+
+      let slot_value_nn = slot_address_nn.cast::<Value>();
+      unsafe { debug_assert!(slot_value_nn.as_ref().is_undefined()) };
+
+      let slot_address_mut = unsafe { slot_address_nn.as_mut() };
+      *slot_address_mut = unsafe { *(value as *const Address) };
+
+      slot_address_nn.cast().as_ptr()
     }
   }
 
@@ -723,14 +754,18 @@ mod tests {
     let mut hx = EscapableHandleScope::new(&mut h);
     let _ = l1;
     let _ = l2;
+    let le;
     let lr = {
       let mut h = HandleScope::new(&mut hx);
       let l3 = String::new2(&mut h, b"CCC").unwrap();
-      let _l4 = fn_with_scope_arg(&mut h);
+      let l4 = fn_with_scope_arg(&mut h);
+      le = h.escape(l4);
+      //let _ = h.escape(l4); # Second escape should cause a panic.
       l3
     };
     let _ = lr == l1;
     let _l5 = String::new2(&mut hx, b"EEE").unwrap();
+    let _ = le == l1;
   }
 
   fn fn_with_scope_arg<'a>(scope: &mut HandleScope<'a>) -> Local<'a, Value> {
