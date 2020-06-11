@@ -6,6 +6,7 @@ use std::mem::transmute_copy;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::ops::DerefMut;
+use std::ptr::null;
 use std::ptr::NonNull;
 
 use crate::Context;
@@ -33,6 +34,7 @@ pub(self) mod reference {
     }
   }
 
+  #[derive(Debug)]
   pub struct ContextScope<'s, P> {
     scope_state: NonNull<data::ScopeState>,
     _phantom: PhantomData<&'s mut P>,
@@ -55,7 +57,7 @@ pub(self) mod reference {
 
   impl<'s, P> Drop for ContextScope<'s, P> {
     fn drop(&mut self) {
-      data::ScopeState::get_mut(self).notify_scope_ref_dropped();
+      data::ScopeState::get_mut(self).notify_scope_dropped();
     }
   }
 
@@ -67,7 +69,7 @@ pub(self) mod reference {
     pub fn new(param: P, context: Local<Context>) -> P::NewScope {
       let isolate = param.get_isolate_mut();
       let state = data::ScopeState::new_context_scope(isolate, context);
-      state.as_scope_ref()
+      state.as_scope()
     }
   }
 
@@ -101,6 +103,7 @@ pub(self) mod reference {
     }
   }
 
+  #[derive(Debug)]
   pub struct HandleScope<'s, P = Context> {
     scope_state: NonNull<data::ScopeState>,
     _phantom: PhantomData<&'s mut P>,
@@ -152,7 +155,7 @@ pub(self) mod reference {
 
   impl<'s, P> Drop for HandleScope<'s, P> {
     fn drop(&mut self) {
-      data::ScopeState::get_mut(self).notify_scope_ref_dropped();
+      data::ScopeState::get_mut(self).notify_scope_dropped();
     }
   }
 
@@ -164,7 +167,7 @@ pub(self) mod reference {
     {
       let isolate = param.get_isolate_mut();
       let state = data::ScopeState::new_handle_scope(isolate);
-      state.as_scope_ref()
+      state.as_scope()
     }
   }
 
@@ -214,6 +217,7 @@ pub(self) mod reference {
     }
   }
 
+  #[derive(Debug)]
   pub struct EscapableHandleScope<'s, 'e: 's> {
     scope_state: NonNull<data::ScopeState>,
     _phantom: PhantomData<(&'s mut raw::HandleScope, &'e raw::EscapeSlot)>,
@@ -236,7 +240,7 @@ pub(self) mod reference {
 
   impl<'s, 'e: 's> Drop for EscapableHandleScope<'s, 'e> {
     fn drop(&mut self) {
-      data::ScopeState::get_mut(self).notify_scope_ref_dropped();
+      data::ScopeState::get_mut(self).notify_scope_dropped();
     }
   }
 
@@ -248,7 +252,7 @@ pub(self) mod reference {
     {
       let isolate = param.get_isolate_mut();
       let state = data::ScopeState::new_escapable_handle_scope(isolate);
-      state.as_scope_ref()
+      state.as_scope()
     }
   }
 
@@ -291,12 +295,13 @@ pub(self) mod reference {
 pub(crate) mod data {
   use super::*;
 
+  #[derive(Debug)]
   pub struct ScopeState {
     pub(super) isolate: NonNull<Isolate>,
     pub(super) context: Option<NonNull<Context>>,
     pub(super) escape_slot: Option<NonNull<raw::EscapeSlot>>,
     parent: Option<NonNull<ScopeState>>,
-    deferred_drop_pending: bool,
+    deferred_drop: bool,
     data: ScopeData,
   }
 
@@ -305,9 +310,13 @@ pub(crate) mod data {
       isolate: &'s mut Isolate,
       context: Local<'s, Context>,
     ) -> &'s mut Self {
-      Self::new_with(isolate, |state| {
-        state.context =
-          NonNull::new(&*context as *const Context as *mut Context);
+      Self::new_with(isolate, move |state| {
+        state.context = NonNull::new(&*context as *const _ as *mut Context);
+        state.data = ScopeData::ContextScope(raw::ContextScope::uninit());
+        match &mut state.data {
+          ScopeData::ContextScope(raw) => raw.init(&*context),
+          _ => unreachable!(),
+        }
       })
     }
 
@@ -359,7 +368,7 @@ pub(crate) mod data {
         parent,
         context,
         escape_slot,
-        deferred_drop_pending: false,
+        deferred_drop: false,
         data: ScopeData::default(),
       };
       let mut state_box = Box::new(state);
@@ -370,15 +379,16 @@ pub(crate) mod data {
     }
 
     fn drop(&mut self) {
-      // Restore the previously "current" scope.
+      // Make our parent scope 'current' again.
       let parent = self.parent;
       let isolate = self.get_isolate_mut();
       isolate.set_current_scope(parent);
+
       // Turn the &mut self pointer back into a box and drop it.
       let _ = unsafe { Box::from_raw(self) };
     }
 
-    pub(super) fn notify_scope_ref_dropped(&mut self) {
+    pub(super) fn notify_scope_dropped(&mut self) {
       // This function is called when the `reference::Scope` object is dropped.
       // With regard to (escapable) handle scopes: the Rust borrow checker
       // allows these to be dropped before all the local handles that were
@@ -389,32 +399,32 @@ pub(crate) mod data {
       match &self.data {
         ScopeData::HandleScope(_) | ScopeData::EscapableHandleScope(_) => {
           // Defer drop.
-          let prev_flag_value = replace(&mut self.deferred_drop_pending, true);
+          let prev_flag_value = replace(&mut self.deferred_drop, true);
           assert_eq!(prev_flag_value, false);
         }
         _ => {
-          // For scopes that do no contain handles, there's no need to defer
-          // dropping, so do it immediately.
+          // Regular, immediate drop.
           self.drop();
         }
       }
     }
 
-    pub(super) fn as_scope_ref<S: reference::Scope>(&mut self) -> S {
+    pub(super) fn as_scope<S: reference::Scope>(&mut self) -> S {
       assert_eq!(size_of::<&mut Self>(), size_of::<S>());
-      unsafe { transmute_copy(&self) }
+      let self_nn = NonNull::from(self);
+      unsafe { transmute_copy(&self_nn) }
     }
 
     pub(super) fn get<S: reference::Scope>(scope: &S) -> &Self {
-      let state = unsafe { &*(scope as *const _ as *const Self) };
-      state.do_deferred_drop_and_assert_scope_is_current();
-      state
+      let self_nn = unsafe { *(scope as *const _ as *const NonNull<Self>) };
+      Self::touch(self_nn);
+      unsafe { &*self_nn.as_ptr() }
     }
 
     pub(super) fn get_mut<S: reference::Scope>(scope: &mut S) -> &mut Self {
-      let state = unsafe { &mut *(scope as *mut _ as *mut Self) };
-      state.do_deferred_drop_and_assert_scope_is_current();
-      state
+      let self_nn = unsafe { *(scope as *mut _ as *mut NonNull<Self>) };
+      Self::touch(self_nn);
+      unsafe { &mut *self_nn.as_ptr() }
     }
 
     pub(super) fn get_isolate(&self) -> &Isolate {
@@ -425,37 +435,26 @@ pub(crate) mod data {
       unsafe { self.isolate.as_mut() }
     }
 
-    fn do_deferred_drop_and_assert_scope_is_current(&self) {
-      let self_ptr = self as *const _ as *mut Self;
-      let self_nn = unsafe { NonNull::new_unchecked(self_ptr) };
+    fn touch(self_nn: NonNull<ScopeState>) {
       loop {
-        let current_scope = self.get_isolate().get_current_scope();
+        let current_scope = unsafe { self_nn.as_ref() }
+          .get_isolate()
+          .get_current_scope();
         match current_scope {
           Some(current_scope_nn) if current_scope_nn == self_nn => break,
           Some(mut current_scope_nn)
-            if unsafe { current_scope_nn.as_ref().deferred_drop_pending } =>
+            if unsafe { current_scope_nn.as_ref().deferred_drop } =>
           unsafe { current_scope_nn.as_mut().drop() }
           _ => panic!("an attempt has been made to use an inactive scope"),
         }
       }
     }
-
-    fn assert_scope_is_current(&self) {
-      let self_ptr: *const Self = self;
-      let is_current = self
-        .get_isolate()
-        .get_current_scope()
-        .map(NonNull::as_ptr)
-        .map(|current_ptr| current_ptr as *const _)
-        .map(|current_ptr| current_ptr == self_ptr)
-        .unwrap_or(false);
-      assert!(is_current);
-    }
   }
 
+  #[derive(Debug)]
   pub(super) enum ScopeData {
     None,
-    Context,
+    ContextScope(raw::ContextScope),
     HandleScope(raw::HandleScope),
     EscapableHandleScope(raw::EscapableHandleScope),
   }
@@ -474,8 +473,34 @@ mod raw {
   #[repr(transparent)]
   pub(super) struct Address(usize);
 
+  #[derive(Debug, Eq, PartialEq)]
+  pub(super) struct ContextScope {
+    entered_context: *const Context,
+  }
+
+  impl ContextScope {
+    pub(super) fn uninit() -> Self {
+      Self {
+        entered_context: null(),
+      }
+    }
+
+    pub(super) fn init(&mut self, context: *const Context) {
+      debug_assert!(self.entered_context.is_null());
+      unsafe { v8__Context__Enter(context) };
+      self.entered_context = context;
+    }
+  }
+
+  impl Drop for ContextScope {
+    fn drop(&mut self) {
+      assert!(!self.entered_context.is_null());
+      unsafe { v8__Context__Exit(self.entered_context) };
+    }
+  }
+
   #[repr(C)]
-  #[derive(Eq, PartialEq)]
+  #[derive(Debug, Eq, PartialEq)]
   pub(super) struct HandleScope {
     isolate_: *mut Isolate,
     prev_next_: *mut Address,
@@ -488,7 +513,7 @@ mod raw {
     }
 
     pub(super) fn init(&mut self, isolate: *mut Isolate) {
-      assert!(self.isolate_.is_null());
+      debug_assert!(self.isolate_.is_null());
       let buf = self as *mut _ as *mut MaybeUninit<Self>;
       unsafe { v8__HandleScope__CONSTRUCT(buf, isolate) };
     }
@@ -501,6 +526,7 @@ mod raw {
     }
   }
 
+  #[derive(Debug)]
   pub(super) struct EscapeSlot(Option<NonNull<raw::Address>>);
 
   impl EscapeSlot {
@@ -510,16 +536,17 @@ mod raw {
 
     fn init(&mut self, isolate: *mut Isolate) {
       unsafe {
-        let undefined = v8__Undefined(isolate);
-        let local = v8__Local__New(isolate, undefined as *const _);
+        let undefined = v8__Undefined(isolate) as *const Data;
+        let local = v8__Local__New(isolate, undefined);
         let address = &*local as *const _ as *mut raw::Address;
         let slot = NonNull::new_unchecked(address);
-        let none = self.0.replace(slot.cast());
-        debug_assert!(none.is_none());
+        let uninit_slot = self.0.replace(slot);
+        debug_assert!(uninit_slot.is_none());
       }
     }
   }
 
+  #[derive(Debug)]
   pub(super) struct EscapableHandleScope {
     handle_scope: raw::HandleScope,
     escape_slot: raw::EscapeSlot,
@@ -636,8 +663,6 @@ mod tests {
   use std::convert::TryInto;
   use std::ptr::null;
 
-  // ***** TODO: actually enter/exit context *****
-
   extern "C" {
     fn v8__Context__New(
       isolate: *mut Isolate,
@@ -698,12 +723,13 @@ mod tests {
     let mut hx = EscapableHandleScope::new(&mut h);
     let _ = l1;
     let _ = l2;
-    let _lr = {
+    let lr = {
       let mut h = HandleScope::new(&mut hx);
       let l3 = String::new2(&mut h, b"CCC").unwrap();
       let _l4 = fn_with_scope_arg(&mut h);
       l3
     };
+    let _ = lr == l1;
     let _l5 = String::new2(&mut hx, b"EEE").unwrap();
   }
 
