@@ -217,7 +217,7 @@ impl Isolate {
   ) {
     let data =
       current_scope.map(NonNull::as_ptr).unwrap_or_else(null_mut) as *mut _;
-    unsafe { v8__Isolate__SetData(self, 2, data) }
+    unsafe { v8__Isolate__SetData(self, 1, data) }
   }
 
   /// Get mutable reference to embedder data.
