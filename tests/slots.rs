@@ -39,9 +39,9 @@ impl CoreIsolate {
 
   // Returns false if there was an error.
   fn execute(&mut self, code: &str) -> bool {
-    let ref mut scope = v8::HandleScope::new(&mut self.0);
+    let scope = &mut v8::HandleScope::new(&mut self.0);
     let context = v8::Context::new(scope);
-    let ref mut scope = v8::ContextScope::new(scope, context);
+    let scope = &mut v8::ContextScope::new(scope, context);
     let source = v8::String::new(scope, code).unwrap();
     let mut script = v8::Script::compile(scope, context, source, None).unwrap();
     let r = script.run(scope, context);
