@@ -2,7 +2,7 @@
 use crate::isolate_create_params::raw;
 use crate::isolate_create_params::CreateParams;
 use crate::promise::PromiseRejectMessage;
-use crate::scope2::data::ScopeState;
+use crate::scope2::ScopeData;
 use crate::support::Opaque;
 use crate::Context;
 use crate::Function;
@@ -206,14 +206,14 @@ impl Isolate {
   }
 
   /// Get a raw reference to the most recently entered scope.
-  pub(crate) fn get_current_scope(&self) -> Option<NonNull<ScopeState>> {
-    unsafe { NonNull::new(v8__Isolate__GetData(self, 1) as *mut ScopeState) }
+  pub(crate) fn get_current_scope(&self) -> Option<NonNull<ScopeData>> {
+    unsafe { NonNull::new(v8__Isolate__GetData(self, 1) as *mut ScopeData) }
   }
 
   /// Updates the most recently entered scope.
   pub(crate) fn set_current_scope(
     &mut self,
-    current_scope: Option<NonNull<ScopeState>>,
+    current_scope: Option<NonNull<ScopeData>>,
   ) {
     let data =
       current_scope.map(NonNull::as_ptr).unwrap_or_else(null_mut) as *mut _;
