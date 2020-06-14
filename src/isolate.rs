@@ -2,11 +2,10 @@
 use crate::isolate_create_params::raw;
 use crate::isolate_create_params::CreateParams;
 use crate::promise::PromiseRejectMessage;
-use crate::scope2::ScopeData;
+use crate::scope::ScopeData;
 use crate::support::Opaque;
 use crate::Context;
 use crate::Function;
-use crate::InIsolate;
 use crate::Local;
 use crate::Message;
 use crate::Module;
@@ -218,6 +217,13 @@ impl Isolate {
     let data =
       current_scope.map(NonNull::as_ptr).unwrap_or_else(null_mut) as *mut _;
     unsafe { v8__Isolate__SetData(self, 1, data) }
+  }
+
+  /// Resets the scope stack, popping any remaining scopes that are no longer
+  /// in use but which have not yet been cleaned up. Note that calling this
+  /// function while a scope is active causes a panic.
+  pub(crate) fn reset_scopes(&mut self) {
+    ScopeData::reset(self)
   }
 
   /// Get mutable reference to embedder data.
@@ -562,16 +568,15 @@ impl OwnedIsolate {
     let cxx_isolate = NonNull::new(cxx_isolate).unwrap();
     Self { cxx_isolate }
   }
-}
 
-impl InIsolate for OwnedIsolate {
-  fn isolate(&mut self) -> &mut Isolate {
-    self.deref_mut()
+  pub(crate) fn get_isolate_ptr(&self) -> *mut Isolate {
+    self.cxx_isolate.as_ptr()
   }
 }
 
 impl Drop for OwnedIsolate {
   fn drop(&mut self) {
+    self.reset_scopes();
     unsafe { self.cxx_isolate.as_mut().dispose() }
   }
 }

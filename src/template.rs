@@ -8,11 +8,11 @@ use crate::support::MapFnTo;
 use crate::Context;
 use crate::Function;
 use crate::FunctionCallback;
+use crate::HandleScope;
 use crate::Local;
 use crate::Object;
 use crate::PropertyAttribute;
 use crate::String;
-use crate::ToLocal;
 use crate::NONE;
 
 extern "C" {
@@ -66,26 +66,26 @@ impl Template {
 
 impl FunctionTemplate {
   /// Creates a function template.
-  pub fn new<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+  pub fn new<'s>(
+    scope: &mut HandleScope<'s, ()>,
     callback: impl MapFnTo<FunctionCallback>,
-  ) -> Local<'sc, FunctionTemplate> {
+  ) -> Local<'s, FunctionTemplate> {
     unsafe {
-      scope.to_local(|scope| {
-        v8__FunctionTemplate__New(scope.isolate(), callback.map_fn_to())
+      scope.cast_local(|scope| {
+        v8__FunctionTemplate__New(scope.get_isolate_ptr(), callback.map_fn_to())
       })
     }
     .unwrap()
   }
 
   /// Returns the unique function instance in the current execution context.
-  pub fn get_function<'sc>(
+  pub fn get_function<'s>(
     &mut self,
-    scope: &mut impl ToLocal<'sc>,
+    scope: &mut HandleScope<'s, ()>,
     context: Local<Context>,
-  ) -> Option<Local<'sc, Function>> {
+  ) -> Option<Local<'s, Function>> {
     unsafe {
-      scope.to_local(|_| v8__FunctionTemplate__GetFunction(&*self, &*context))
+      scope.cast_local(|_| v8__FunctionTemplate__GetFunction(&*self, &*context))
     }
   }
 
@@ -99,22 +99,24 @@ impl FunctionTemplate {
 
 impl ObjectTemplate {
   /// Creates an object template.
-  pub fn new<'sc>(scope: &mut impl ToLocal<'sc>) -> Local<'sc, ObjectTemplate> {
+  pub fn new<'s>(scope: &mut HandleScope<'s, ()>) -> Local<'s, ObjectTemplate> {
     unsafe {
-      scope.to_local(|scope| {
-        v8__ObjectTemplate__New(scope.isolate(), std::ptr::null())
+      scope.cast_local(|scope| {
+        v8__ObjectTemplate__New(scope.get_isolate_ptr(), std::ptr::null())
       })
     }
     .unwrap()
   }
 
   /// Creates an object template from a function template.
-  pub fn new_from_template<'sc>(
-    scope: &mut impl ToLocal<'sc>,
+  pub fn new_from_template<'s>(
+    scope: &mut HandleScope<'s, ()>,
     templ: Local<FunctionTemplate>,
-  ) -> Local<'sc, ObjectTemplate> {
+  ) -> Local<'s, ObjectTemplate> {
     unsafe {
-      scope.to_local(|scope| v8__ObjectTemplate__New(scope.isolate(), &*templ))
+      scope.cast_local(|scope| {
+        v8__ObjectTemplate__New(scope.get_isolate_ptr(), &*templ)
+      })
     }
     .unwrap()
   }
@@ -122,11 +124,11 @@ impl ObjectTemplate {
   /// Creates a new instance of this object template.
   pub fn new_instance<'a>(
     &self,
-    scope: &mut impl ToLocal<'a>,
+    scope: &mut HandleScope<'a>,
     context: Local<Context>,
   ) -> Option<Local<'a, Object>> {
     unsafe {
-      scope.to_local(|_| v8__ObjectTemplate__NewInstance(self, &*context))
+      scope.cast_local(|_| v8__ObjectTemplate__NewInstance(self, &*context))
     }
   }
 }

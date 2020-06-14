@@ -38,22 +38,22 @@ use std::ptr::NonNull;
 /// never empty. In situations where empty handles are needed, use
 /// Option<Local>.
 #[repr(C)]
-pub struct Local<'sc, T>(NonNull<T>, PhantomData<&'sc ()>);
+pub struct Local<'s, T>(NonNull<T>, PhantomData<&'s ()>);
 
-impl<'sc, T> Copy for Local<'sc, T> {}
+impl<'s, T> Copy for Local<'s, T> {}
 
-impl<'sc, T> Clone for Local<'sc, T> {
+impl<'s, T> Clone for Local<'s, T> {
   fn clone(&self) -> Self {
     *self
   }
 }
 
-impl<'sc, T> Local<'sc, T> {
+impl<'s, T> Local<'s, T> {
   /// Create a local handle by downcasting from one of its super types.
   /// This function is unsafe because the cast is unchecked.
-  pub unsafe fn cast<A>(other: Local<'sc, A>) -> Self
+  pub unsafe fn cast<A>(other: Local<'s, A>) -> Self
   where
-    Local<'sc, A>: From<Self>,
+    Local<'s, A>: From<Self>,
   {
     transmute(other)
   }
@@ -79,14 +79,14 @@ impl<'sc, T> Local<'sc, T> {
   }
 }
 
-impl<'sc, T> Deref for Local<'sc, T> {
+impl<'s, T> Deref for Local<'s, T> {
   type Target = T;
   fn deref(&self) -> &T {
     unsafe { self.0.as_ref() }
   }
 }
 
-impl<'sc, T> DerefMut for Local<'sc, T> {
+impl<'s, T> DerefMut for Local<'s, T> {
   fn deref_mut(&mut self) -> &mut T {
     unsafe { self.0.as_mut() }
   }
