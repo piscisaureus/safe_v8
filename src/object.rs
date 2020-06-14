@@ -196,21 +196,21 @@ impl Object {
     .into()
   }
 
-  pub fn get<'a>(
+  pub fn get<'s>(
     &self,
-    scope: &mut HandleScope<'a>,
+    scope: &mut HandleScope<'s>,
     context: Local<Context>,
     key: Local<Value>,
-  ) -> Option<Local<'a, Value>> {
+  ) -> Option<Local<'s, Value>> {
     unsafe { scope.cast_local(|_| v8__Object__Get(self, &*context, &*key)) }
   }
 
-  pub fn get_index<'a>(
+  pub fn get_index<'s>(
     &self,
-    scope: &mut HandleScope<'a>,
+    scope: &mut HandleScope<'s>,
     context: Local<Context>,
     index: u32,
-  ) -> Option<Local<'a, Value>> {
+  ) -> Option<Local<'s, Value>> {
     unsafe {
       scope.cast_local(|_| v8__Object__GetIndex(self, &*context, index))
     }
@@ -218,10 +218,10 @@ impl Object {
 
   /// Get the prototype object. This does not skip objects marked to be
   /// skipped by proto and it does not consult the security handler.
-  pub fn get_prototype<'a>(
+  pub fn get_prototype<'s>(
     &self,
-    scope: &mut HandleScope<'a>,
-  ) -> Option<Local<'a, Value>> {
+    scope: &mut HandleScope<'s>,
+  ) -> Option<Local<'s, Value>> {
     unsafe { scope.cast_local(|_| v8__Object__GetPrototype(self)) }
   }
 
@@ -248,10 +248,10 @@ impl Object {
   }
 
   /// Returns the context in which the object was created.
-  pub fn creation_context<'a>(
+  pub fn creation_context<'s>(
     &self,
-    scope: &mut HandleScope<'a>,
-  ) -> Local<'a, Context> {
+    scope: &mut HandleScope<'s>,
+  ) -> Local<'s, Context> {
     unsafe { scope.cast_local(|_| v8__Object__CreationContext(self)) }.unwrap()
   }
 

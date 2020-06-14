@@ -234,11 +234,8 @@ fn escapable_handle_scope() {
   }
 }
 
-#[ignore]
 #[test]
-#[should_panic(
-  expected = "Only one handle can escape from an EscapableHandleScope"
-)]
+#[should_panic(expected = "EscapableHandleScope::escape() called twice")]
 fn escapable_handle_scope_can_escape_only_once() {
   let _setup_guard = setup();
   let isolate = v8::Isolate::new(Default::default());

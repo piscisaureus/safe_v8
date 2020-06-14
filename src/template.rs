@@ -122,11 +122,11 @@ impl ObjectTemplate {
   }
 
   /// Creates a new instance of this object template.
-  pub fn new_instance<'a>(
+  pub fn new_instance<'s>(
     &self,
-    scope: &mut HandleScope<'a>,
+    scope: &mut HandleScope<'s>,
     context: Local<Context>,
-  ) -> Option<Local<'a, Object>> {
+  ) -> Option<Local<'s, Object>> {
     unsafe {
       scope.cast_local(|_| v8__ObjectTemplate__NewInstance(self, &*context))
     }
