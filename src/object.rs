@@ -293,7 +293,8 @@ impl Array {
     .unwrap()
   }
 
-  /// Creates a JavaScript array out of a Local<Value> array with a known length.
+  /// Creates a JavaScript array out of a Local<Value> array with a known
+  /// length.
   pub fn new_with_elements<'s>(
     scope: &mut HandleScope<'s>,
     elements: &[Local<Value>],

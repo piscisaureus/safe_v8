@@ -101,6 +101,7 @@ pub use primitives::*;
 pub use promise::{PromiseRejectEvent, PromiseRejectMessage, PromiseState};
 pub use property_attribute::*;
 pub use proxy::*;
+#[doc(inline)]
 pub use scope::*;
 pub use script::ScriptOrigin;
 pub use snapshot::FunctionCodeHandling;

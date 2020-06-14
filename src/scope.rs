@@ -31,15 +31,8 @@ pub(crate) use data::ScopeData;
 mod api {
   use super::*;
 
-  pub unsafe trait Scope: Sized {
-    fn cast_ref<S: Scope>(&self) -> &S {
-      unsafe { &*(self as *const _ as *const S) }
-    }
-    fn cast_mut<S: Scope>(&mut self) -> &mut S {
-      unsafe { &mut *(self as *mut _ as *mut S) }
-    }
-  }
-
+  /// Stack-allocated class which sets the execution context for all operations
+  /// executed within a local scope.
   #[derive(Debug)]
   pub struct ContextScope<'s, P> {
     data: NonNull<data::ScopeData>,
@@ -59,6 +52,8 @@ mod api {
   }
 
   impl<'s, P> ContextScope<'s, P> {
+    /// Returns the context of the currently running JavaScript, or the context
+    /// on the top of the stack if no JavaScript is running.
     pub fn get_current_context(&self) -> Local<'s, Context> {
       // To avoid creating a new Local every time GetCurrentContext is called,
       // the current context is cached in `struct ScopeData`.
@@ -84,6 +79,10 @@ mod api {
       }
     }
 
+    /// Returns either the last context entered through V8's C++ API, or the
+    /// context of the currently running microtask while processing microtasks.
+    /// If a context is entered while executing a microtask, that context is
+    /// returned.
     pub fn get_entered_or_microtask_context(&mut self) -> Local<'s, Context> {
       let data = data::ScopeData::get(self);
       let isolate_ptr = data.get_isolate_ptr();
@@ -182,6 +181,18 @@ mod api {
     }
   }
 
+  /// A stack-allocated class that governs a number of local handles.
+  /// After a handle scope has been created, all local handles will be
+  /// allocated within that handle scope until either the handle scope is
+  /// deleted or another handle scope is created.  If there is already a
+  /// handle scope and a new one is created, all allocations will take
+  /// place in the new handle scope until it is deleted.  After that,
+  /// new handles will again be allocated in the original handle scope.
+  ///
+  /// After the handle scope of a local handle has been deleted the
+  /// garbage collector will no longer track the object stored in the
+  /// handle and may deallocate it.  The behavior of accessing a handle
+  /// for which the handle scope has been deleted is undefined.
   #[derive(Debug)]
   pub struct HandleScope<'s, C = Context> {
     data: NonNull<data::ScopeData>,
@@ -326,6 +337,8 @@ mod api {
     }
   }
 
+  /// A HandleScope which first allocates a handle in the current scope
+  /// which will be later filled with the escape value.
   #[derive(Debug)]
   pub struct EscapableHandleScope<'s, 'e: 's, C = Context> {
     data: NonNull<data::ScopeData>,
@@ -443,15 +456,15 @@ mod api {
     }
   }
 
-  /// A CallbackScope can be used to bootstrap a HandleScope + ContextScope in a  
-  /// callback function that gets called by V8. Note that not creating a scope in
-  /// callback is not always allowed per the V8 API contract; e.g. you should
-  /// not create a scope inside an InteruptCallback.
+  /// A CallbackScope can be used to bootstrap a HandleScope + ContextScope in a
+  /// callback function that gets called by V8. Note that, per the V8 API
+  /// contract, there are a number of callback types in which you should not
+  /// create scopes, execute JavaScript, nor create JavaScript values.
   ///
-  /// Note that for some callback types, rusty_v8 internally creates a scope and
-  /// passes it to embedder callback. Eventually we intend to wrap all callbacks
-  /// in a similar way, so the end user never needs to construct a
-  /// CallbackScope.
+  /// For some callback types, rusty_v8 internally creates a scope and passes it
+  /// as an argument to to embedder callback. Eventually we intend to wrap all
+  /// callbacks in this fashion, so the embedder would never needs to construct
+  /// a CallbackScope.
   ///
   /// A CallbackScope can be created from the following inputs:
   ///   - `Local<Context>`
@@ -459,9 +472,9 @@ mod api {
   ///   - `Local<Object>`
   ///   - `Local<Promise>`
   ///   - `Local<SharedArrayBuffer>`
-  ///   - `&PromiseRejectMessage`
   ///   - `&FunctionCallbackInfo`
   ///   - `&PropertyCallbackInfo`
+  ///   - `&PromiseRejectMessage`
   #[derive(Debug)]
   pub struct CallbackScope<'s> {
     data: NonNull<data::ScopeData>,
@@ -570,9 +583,18 @@ mod api {
       unsafe { &mut *raw::v8__PropertyCallbackInfo__GetIsolate(self) }
     }
   }
+
+  pub unsafe trait Scope: Sized {
+    fn cast_ref<S: Scope>(&self) -> &S {
+      unsafe { &*(self as *const _ as *const S) }
+    }
+    fn cast_mut<S: Scope>(&mut self) -> &mut S {
+      unsafe { &mut *(self as *mut _ as *mut S) }
+    }
+  }
 }
 
-pub mod data {
+mod data {
   use super::*;
 
   #[derive(Debug)]
@@ -1052,7 +1074,7 @@ mod tests {
       let l3 = String::new2(&mut h, b"CCC").unwrap();
       let l4 = fn_with_scope_arg(&mut h);
       le = h.escape(l4);
-      //let _ = h.escape(l4); # Second escape should cause a panic.
+      // let _ = h.escape(l4); # Second escape should cause a panic.
       l3
     };
     let _ = lr == l1;

@@ -1302,8 +1302,8 @@ fn promise_resolved() {
     let result = promise.result(scope);
     let result_str = result.to_string(scope).unwrap();
     assert_eq!(result_str.to_rust_string_lossy(scope), "test".to_string());
-    // Resolve again with different value, since promise is already in `Fulfilled` state
-    // it should be ignored.
+    // Resolve again with different value, since promise is already in
+    // `Fulfilled` state it should be ignored.
     let value = v8::String::new(scope, "test2").unwrap();
     resolver.resolve(context, value.into());
     let result = promise.result(scope);
@@ -1333,8 +1333,8 @@ fn promise_rejected() {
     let result = promise.result(scope);
     let result_str = result.to_string(scope).unwrap();
     assert_eq!(result_str.to_rust_string_lossy(scope), "test".to_string());
-    // Reject again with different value, since promise is already in `Rejected` state
-    // it should be ignored.
+    // Reject again with different value, since promise is already in `Rejected`
+    // state it should be ignored.
     let value = v8::String::new(scope, "test2").unwrap();
     resolver.reject(context, value.into());
     let result = promise.result(scope);
@@ -1559,12 +1559,9 @@ fn module_instantiation_failures1() {
     let context = v8::Context::new(scope);
     let scope = &mut v8::ContextScope::new(scope, context);
 
-    let source_text = v8::String::new(
-      scope,
-      "import './foo.js';\n\
-       export {} from './bar.js';",
-    )
-    .unwrap();
+    let source_text =
+      v8::String::new(scope, "import './foo.js';\nexport {} from './bar.js';")
+        .unwrap();
     let origin = mock_script_origin(scope, "foo.js");
     let source = v8::script_compiler::Source::new(source_text, &origin);
 
@@ -1639,8 +1636,7 @@ fn module_evaluation() {
 
     let source_text = v8::String::new(
       scope,
-      "import 'Object.expando = 5';\n\
-       import 'Object.expando *= 2';",
+      "import 'Object.expando = 5';\nimport 'Object.expando *= 2';",
     )
     .unwrap();
     let origin = mock_script_origin(scope, "foo.js");
@@ -1944,9 +1940,7 @@ fn dynamic_import() {
     let result = eval(
       scope,
       context,
-      "(async function () {\n\
-       let x = await import('bar.js');\n\
-       })();",
+      "(async function () {\nlet x = await import('bar.js');\n})();",
     );
     assert!(result.is_some());
     assert_eq!(CALL_COUNT.load(Ordering::SeqCst), 1);
@@ -2932,12 +2926,9 @@ fn module_snapshot() {
       let context = v8::Context::new(scope);
       let scope = &mut v8::ContextScope::new(scope, context);
 
-      let source_text = v8::String::new(
-        scope,
-        "import 'globalThis.b = 42';\n\
-         globalThis.a = 3",
-      )
-      .unwrap();
+      let source_text =
+        v8::String::new(scope, "import 'globalThis.b = 42';\nglobalThis.a = 3")
+          .unwrap();
       let origin = mock_script_origin(scope, "foo.js");
       let source = v8::script_compiler::Source::new(source_text, &origin);
 
