@@ -1,13 +1,12 @@
 use std::cell::Cell;
-use std::convert::Into;
 use std::marker::PhantomData;
 use std::mem::replace;
 use std::mem::size_of;
-use std::mem::transmute_copy;
 use std::mem::MaybeUninit;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::ops::DerefMut;
+use std::ptr;
 use std::ptr::null;
 use std::ptr::NonNull;
 
@@ -517,7 +516,7 @@ pub(crate) mod data {
     ) -> &'s mut Self {
       Self::new_with(isolate, move |state| {
         state.context.set(Some(context.as_non_null()));
-        state.data = ScopeData::ContextScope(raw::ContextScope::uninit());
+        state.data = ScopeData::ContextScope(raw::ContextScope::zeroed());
         match &mut state.data {
           ScopeData::ContextScope(raw) => raw.init(&*context),
           _ => unreachable!(),
@@ -527,7 +526,7 @@ pub(crate) mod data {
 
     pub(super) fn new_handle_scope(isolate: &mut Isolate) -> &mut Self {
       Self::new_with(isolate, |state| {
-        state.data = ScopeData::HandleScope(raw::HandleScope::uninit());
+        state.data = ScopeData::HandleScope(raw::HandleScope::zeroed());
         match &mut state.data {
           ScopeData::HandleScope(raw) => raw.init(state.isolate.as_ptr()),
           _ => unreachable!(),
@@ -540,7 +539,7 @@ pub(crate) mod data {
     ) -> &mut Self {
       Self::new_with(isolate, |state| {
         state.data =
-          ScopeData::EscapableHandleScope(raw::EscapableHandleScope::uninit());
+          ScopeData::EscapableHandleScope(raw::EscapableHandleScope::zeroed());
         match &mut state.data {
           ScopeData::EscapableHandleScope(raw) => {
             state.escape_slot = raw.init(state.isolate.as_ptr());
@@ -628,7 +627,7 @@ pub(crate) mod data {
     pub(super) fn as_scope<S: api::Scope>(&mut self) -> S {
       assert_eq!(size_of::<&mut Self>(), size_of::<S>());
       let self_nn = NonNull::from(self);
-      unsafe { transmute_copy(&self_nn) }
+      unsafe { ptr::read(&self_nn as *const _ as *const S) }
     }
 
     pub(super) fn get<S: api::Scope>(scope: &S) -> &Self {
@@ -695,7 +694,7 @@ mod raw {
   }
 
   impl ContextScope {
-    pub(super) fn uninit() -> Self {
+    pub(super) fn zeroed() -> Self {
       Self {
         entered_context: null(),
       }
@@ -724,7 +723,7 @@ mod raw {
   }
 
   impl HandleScope {
-    pub(super) fn uninit() -> Self {
+    pub(super) fn zeroed() -> Self {
       unsafe { MaybeUninit::<Self>::zeroed().assume_init() }
     }
 
@@ -746,7 +745,7 @@ mod raw {
   pub(super) struct EscapeSlot(Option<NonNull<raw::Address>>);
 
   impl EscapeSlot {
-    fn uninit() -> Self {
+    fn zeroed() -> Self {
       Self(None)
     }
 
@@ -785,10 +784,10 @@ mod raw {
   }
 
   impl EscapableHandleScope {
-    pub(super) fn uninit() -> Self {
+    pub(super) fn zeroed() -> Self {
       Self {
-        handle_scope: HandleScope::uninit(),
-        escape_slot: EscapeSlot::uninit(),
+        handle_scope: HandleScope::zeroed(),
+        escape_slot: EscapeSlot::zeroed(),
       }
     }
 
