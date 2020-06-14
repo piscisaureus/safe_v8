@@ -11,18 +11,17 @@
 //!
 //! let mut isolate = v8::Isolate::new(Default::default());
 //!
-//! let mut scope = v8::HandleScope::new(&isolate);
-//! let context = v8::Context::new(&mut scope);
-//! let mut scope = v8::ContextScope::new(&mut scope, context);
+//! let ref mut scope = v8::HandleScope::new(&mut isolate);
+//! let context = v8::Context::new(scope);
+//! let ref mut scope = v8::ContextScope::new(scope, context);
 //!
-//! let code = v8::String::new(&mut scope, "'Hello' + ' World!'").unwrap();
-//! println!("javascript code: {}", code.to_rust_string_lossy(&mut scope));
+//! let code = v8::String::new(scope, "'Hello' + ' World!'").unwrap();
+//! println!("javascript code: {}", code.to_rust_string_lossy(scope));
 //!
-//! let mut script =
-//!   v8::Script::compile(&mut scope, context, code, None).unwrap();
-//! let result = script.run(&mut scope, context).unwrap();
-//! let result = result.to_string(&mut scope).unwrap();
-//! println!("result: {}", result.to_rust_string_lossy(&mut scope));
+//! let mut script = v8::Script::compile(scope, context, code, None).unwrap();
+//! let result = script.run(scope, context).unwrap();
+//! let result = result.to_string(scope).unwrap();
+//! println!("result: {}", result.to_rust_string_lossy(scope));
 //! ```
 
 #![allow(clippy::missing_safety_doc)]

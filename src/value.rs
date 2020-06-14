@@ -515,10 +515,7 @@ impl Value {
     out.into()
   }
 
-  pub fn integer_value<'s>(
-    &self,
-    scope: &mut HandleScope<'s>,
-  ) -> Option<i64> {
+  pub fn integer_value<'s>(&self, scope: &mut HandleScope<'s>) -> Option<i64> {
     let mut out = Maybe::<i64>::default();
     unsafe {
       v8__Value__IntegerValue(self, &*scope.get_current_context(), &mut out)

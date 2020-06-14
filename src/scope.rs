@@ -51,7 +51,7 @@ mod api {
     P: NewContextScopeParam<'s>,
   {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(param: P, context: Local<Context>) -> P::NewScope {
+    pub fn new(param: &'s mut P, context: Local<Context>) -> P::NewScope {
       let isolate = param.get_isolate_mut();
       let data = data::ScopeData::new_context_scope(isolate, context);
       data.as_scope()
@@ -147,39 +147,37 @@ mod api {
 
   pub unsafe trait NewContextScopeParam<'s> {
     type NewScope: Scope;
-    fn get_isolate_mut(self) -> &'s mut Isolate;
+    fn get_isolate_mut(&mut self) -> &mut Isolate;
   }
 
   unsafe impl<'s, 'p: 's, P: Scope> NewContextScopeParam<'s>
-    for &'s mut ContextScope<'p, P>
+    for ContextScope<'p, P>
   {
     type NewScope = ContextScope<'s, P>;
-    fn get_isolate_mut(self) -> &'s mut Isolate {
+    fn get_isolate_mut(&mut self) -> &mut Isolate {
       data::ScopeData::get_mut(self).get_isolate_mut()
     }
   }
 
-  unsafe impl<'s, 'p: 's, C> NewContextScopeParam<'s>
-    for &'s mut HandleScope<'p, C>
-  {
+  unsafe impl<'s, 'p: 's, C> NewContextScopeParam<'s> for HandleScope<'p, C> {
     type NewScope = ContextScope<'s, HandleScope<'p>>;
-    fn get_isolate_mut(self) -> &'s mut Isolate {
+    fn get_isolate_mut(&mut self) -> &mut Isolate {
       data::ScopeData::get_mut(self).get_isolate_mut()
     }
   }
 
   unsafe impl<'s, 'p: 's, 'e: 'p, C> NewContextScopeParam<'s>
-    for &'s mut EscapableHandleScope<'p, 'e, C>
+    for EscapableHandleScope<'p, 'e, C>
   {
     type NewScope = EscapableHandleScope<'s, 'e>;
-    fn get_isolate_mut(self) -> &'s mut Isolate {
+    fn get_isolate_mut(&mut self) -> &mut Isolate {
       data::ScopeData::get_mut(self).get_isolate_mut()
     }
   }
 
-  unsafe impl<'s, 'p: 's> NewContextScopeParam<'s> for &'s mut CallbackScope<'p> {
+  unsafe impl<'s, 'p: 's> NewContextScopeParam<'s> for CallbackScope<'p> {
     type NewScope = ContextScope<'s, HandleScope<'p>>;
-    fn get_isolate_mut(self) -> &'s mut Isolate {
+    fn get_isolate_mut(&mut self) -> &mut Isolate {
       data::ScopeData::get_mut(self).get_isolate_mut()
     }
   }
@@ -192,7 +190,7 @@ mod api {
 
   impl<'s> HandleScope<'s> {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new<P>(param: P) -> P::NewScope
+    pub fn new<P>(param: &'s mut P) -> P::NewScope
     where
       P: NewHandleScopeParam<'s>,
     {
@@ -285,56 +283,45 @@ mod api {
 
   pub unsafe trait NewHandleScopeParam<'s> {
     type NewScope: Scope;
-    fn get_isolate_mut(self) -> &'s mut Isolate;
+    fn get_isolate_mut(&mut self) -> &mut Isolate;
   }
 
-  unsafe impl<'s> NewHandleScopeParam<'s> for &'s OwnedIsolate {
+  unsafe impl<'s> NewHandleScopeParam<'s> for OwnedIsolate {
     type NewScope = HandleScope<'s, ()>;
-    fn get_isolate_mut(self) -> &'s mut Isolate {
-      unsafe { &mut *self.get_isolate_ptr() }
-    }
-  }
-
-  unsafe impl<'s> NewHandleScopeParam<'s> for &'s mut OwnedIsolate {
-    type NewScope = HandleScope<'s, ()>;
-    fn get_isolate_mut(self) -> &'s mut Isolate {
+    fn get_isolate_mut(&mut self) -> &mut Isolate {
       &mut **self
     }
   }
 
-  unsafe impl<'s, 'p: 's, P> NewHandleScopeParam<'s>
-    for &'s mut ContextScope<'p, P>
+  unsafe impl<'s, 'p: 's, P> NewHandleScopeParam<'s> for ContextScope<'p, P>
   where
-    P: Scope,
-    &'s mut P: NewHandleScopeParam<'s>,
+    P: Scope + NewHandleScopeParam<'s>,
   {
-    type NewScope = <&'s mut P as NewHandleScopeParam<'s>>::NewScope;
-    fn get_isolate_mut(self) -> &'s mut Isolate {
+    type NewScope = <P as NewHandleScopeParam<'s>>::NewScope;
+    fn get_isolate_mut(&mut self) -> &mut Isolate {
       data::ScopeData::get_mut(self).get_isolate_mut()
     }
   }
 
-  unsafe impl<'s, 'p: 's, C> NewHandleScopeParam<'s>
-    for &'s mut HandleScope<'p, C>
-  {
+  unsafe impl<'s, 'p: 's, C> NewHandleScopeParam<'s> for HandleScope<'p, C> {
     type NewScope = HandleScope<'s, C>;
-    fn get_isolate_mut(self) -> &'s mut Isolate {
+    fn get_isolate_mut(&mut self) -> &mut Isolate {
       data::ScopeData::get_mut(self).get_isolate_mut()
     }
   }
 
   unsafe impl<'s, 'p: 's, 'e: 'p, C> NewHandleScopeParam<'s>
-    for &'s mut EscapableHandleScope<'p, 'e, C>
+    for EscapableHandleScope<'p, 'e, C>
   {
     type NewScope = EscapableHandleScope<'s, 'e, C>;
-    fn get_isolate_mut(self) -> &'s mut Isolate {
+    fn get_isolate_mut(&mut self) -> &mut Isolate {
       data::ScopeData::get_mut(self).get_isolate_mut()
     }
   }
 
-  unsafe impl<'s, 'p: 's> NewHandleScopeParam<'s> for &'s mut CallbackScope<'p> {
+  unsafe impl<'s, 'p: 's> NewHandleScopeParam<'s> for CallbackScope<'p> {
     type NewScope = HandleScope<'s>;
-    fn get_isolate_mut(self) -> &'s mut Isolate {
+    fn get_isolate_mut(&mut self) -> &mut Isolate {
       data::ScopeData::get_mut(self).get_isolate_mut()
     }
   }
@@ -348,7 +335,7 @@ mod api {
 
   impl<'s, 'e: 's> EscapableHandleScope<'s, 'e> {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new<P>(param: P) -> P::NewScope
+    pub fn new<P>(param: &'s mut P) -> P::NewScope
     where
       P: NewEscapableHandleScopeParam<'s, 'e>,
     {
@@ -415,44 +402,43 @@ mod api {
 
   pub unsafe trait NewEscapableHandleScopeParam<'s, 'e: 's> {
     type NewScope: Scope;
-    fn get_isolate_mut(self) -> &'s mut Isolate;
+    fn get_isolate_mut(&mut self) -> &mut Isolate;
   }
 
   unsafe impl<'s, 'p: 's, 'e: 'p, P> NewEscapableHandleScopeParam<'s, 'e>
-    for &'s mut ContextScope<'p, P>
+    for ContextScope<'p, P>
   where
-    &'s mut P: NewEscapableHandleScopeParam<'s, 'e>,
+    P: NewEscapableHandleScopeParam<'s, 'e>,
   {
-    type NewScope =
-      <&'s mut P as NewEscapableHandleScopeParam<'s, 'e>>::NewScope;
-    fn get_isolate_mut(self) -> &'s mut Isolate {
+    type NewScope = <P as NewEscapableHandleScopeParam<'s, 'e>>::NewScope;
+    fn get_isolate_mut(&mut self) -> &mut Isolate {
       data::ScopeData::get_mut(self).get_isolate_mut()
     }
   }
 
   unsafe impl<'s, 'p: 's, C> NewEscapableHandleScopeParam<'s, 'p>
-    for &'s mut HandleScope<'p, C>
+    for HandleScope<'p, C>
   {
     type NewScope = EscapableHandleScope<'s, 'p, C>;
-    fn get_isolate_mut(self) -> &'s mut Isolate {
+    fn get_isolate_mut(&mut self) -> &mut Isolate {
       data::ScopeData::get_mut(self).get_isolate_mut()
     }
   }
 
   unsafe impl<'s, 'p: 's, 'e: 'p, C> NewEscapableHandleScopeParam<'s, 'p>
-    for &'s mut EscapableHandleScope<'p, 'e, C>
+    for EscapableHandleScope<'p, 'e, C>
   {
     type NewScope = EscapableHandleScope<'s, 'p, C>;
-    fn get_isolate_mut(self) -> &'s mut Isolate {
+    fn get_isolate_mut(&mut self) -> &mut Isolate {
       data::ScopeData::get_mut(self).get_isolate_mut()
     }
   }
 
   unsafe impl<'s, 'p: 's> NewEscapableHandleScopeParam<'s, 'p>
-    for &'s mut CallbackScope<'p>
+    for CallbackScope<'p>
   {
     type NewScope = EscapableHandleScope<'s, 'p>;
-    fn get_isolate_mut(self) -> &'s mut Isolate {
+    fn get_isolate_mut(&mut self) -> &mut Isolate {
       data::ScopeData::get_mut(self).get_isolate_mut()
     }
   }
@@ -1048,8 +1034,8 @@ mod tests {
   fn test_scopes() {
     crate::V8::initialize_platform(crate::new_default_platform().unwrap());
     crate::V8::initialize();
-    let isolate = Isolate::new(Default::default());
-    let mut h = HandleScope::new(&isolate);
+    let mut isolate = Isolate::new(Default::default());
+    let mut h = HandleScope::new(&mut isolate);
     let context = Context::new2(&mut h);
     let mut h = HandleScope::new(&mut h);
     let mut h = ContextScope::new(&mut h, context);
