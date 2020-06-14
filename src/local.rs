@@ -58,6 +58,10 @@ impl<'sc, T> Local<'sc, T> {
     transmute(other)
   }
 
+  pub(crate) fn as_ptr(self) -> *const T {
+    self.0.as_ptr()
+  }
+
   pub(crate) unsafe fn from_raw(ptr: *const T) -> Option<Self> {
     Some(Self(NonNull::new(ptr as *mut _)?, PhantomData))
   }
@@ -66,8 +70,8 @@ impl<'sc, T> Local<'sc, T> {
     self.0
   }
 
-  pub(crate) fn as_ptr(self) -> *const T {
-    self.0.as_ptr()
+  pub(crate) unsafe fn from_non_null(nn: NonNull<T>) -> Self {
+    Self(nn, PhantomData)
   }
 
   pub(crate) fn slice_into_raw(slice: &[Self]) -> &[*const T] {

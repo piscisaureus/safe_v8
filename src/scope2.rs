@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::convert::Into;
 use std::marker::PhantomData;
 use std::mem::replace;
@@ -10,20 +11,24 @@ use std::ops::DerefMut;
 use std::ptr::null;
 use std::ptr::NonNull;
 
+use crate::function::FunctionCallbackInfo;
+use crate::function::PropertyCallbackInfo;
 use crate::Context;
 use crate::Data;
 use crate::Isolate;
 use crate::Local;
 use crate::Message;
+use crate::Object;
 use crate::OwnedIsolate;
 use crate::Primitive;
+use crate::PromiseRejectMessage;
 use crate::TryCatch;
 use crate::Value;
 
 #[doc(inline)]
-pub use reference::{ContextScope, EscapableHandleScope, HandleScope};
+pub use api::{CallbackScope, ContextScope, EscapableHandleScope, HandleScope};
 
-pub(self) mod reference {
+pub(self) mod api {
   use super::*;
 
   pub unsafe trait Scope: Sized {
@@ -41,7 +46,55 @@ pub(self) mod reference {
     _phantom: PhantomData<&'s mut P>,
   }
 
+  impl<'s, P> ContextScope<'s, P> {
+    pub fn get_current_context(&self) -> Local<'s, Context> {
+      // To avoid creating a new Local every time GetCurrentContext is called,
+      // the current context is cached in `struct ScopeState`.
+      let get_current_context_from_isolate =
+        |state: &data::ScopeState| -> Local<Context> {
+          let isolate_ptr = state.get_isolate() as *const _ as *mut Isolate;
+          let context_ptr =
+            unsafe { raw::v8__Isolate__GetCurrentContext(isolate_ptr) };
+          unsafe { Local::from_raw(context_ptr) }.unwrap()
+        };
+      let state = data::ScopeState::get(self);
+      match state.context.get() {
+        Some(context_nn) => {
+          let context = unsafe { Local::from_non_null(context_nn) };
+          debug_assert!(context == get_current_context_from_isolate(state));
+          context
+        }
+        None => {
+          let context = get_current_context_from_isolate(state);
+          state.context.set(Some(context.as_non_null()));
+          context
+        }
+      }
+    }
+
+    pub fn get_entered_or_microtask_context(&mut self) -> Local<'s, Context> {
+      let state = data::ScopeState::get(self);
+      let isolate_ptr = state.get_isolate() as *const _ as *mut Isolate;
+      let context_ptr =
+        unsafe { raw::v8__Isolate__GetEnteredOrMicrotaskContext(isolate_ptr) };
+      unsafe { Local::from_raw(context_ptr) }.unwrap()
+    }
+  }
+
   unsafe impl<'s, P> Scope for ContextScope<'s, P> {}
+
+  impl<'s> Deref for ContextScope<'s, ()> {
+    type Target = HandleScope<'s, ()>;
+    fn deref(&self) -> &Self::Target {
+      self.cast_ref()
+    }
+  }
+
+  impl<'s> DerefMut for ContextScope<'s, ()> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+      self.cast_mut()
+    }
+  }
 
   impl<'s, P: Scope> Deref for ContextScope<'s, P> {
     type Target = P;
@@ -88,7 +141,9 @@ pub(self) mod reference {
     }
   }
 
-  impl<'s, 'p: 's, P> NewContextScopeParam<'s> for &'s mut HandleScope<'p, P> {
+  impl<'s, 'p: 's, Ctx> NewContextScopeParam<'s>
+    for &'s mut HandleScope<'p, Ctx>
+  {
     type NewScope = ContextScope<'s, HandleScope<'p>>;
     fn get_isolate_mut(self) -> &'s mut Isolate {
       data::ScopeState::get_mut(self).get_isolate_mut()
@@ -105,12 +160,20 @@ pub(self) mod reference {
   }
 
   #[derive(Debug)]
-  pub struct HandleScope<'s, P = Context> {
+  pub struct HandleScope<'s, Ctx = Context> {
     scope_state: NonNull<data::ScopeState>,
-    _phantom: PhantomData<&'s mut P>,
+    _phantom: PhantomData<&'s mut Ctx>,
   }
 
   impl<'s> HandleScope<'s, ()> {
+    pub fn get_isolate(&self) -> &Isolate {
+      data::ScopeState::get(self).get_isolate()
+    }
+
+    pub fn get_isolate_mut(&mut self) -> &mut Isolate {
+      data::ScopeState::get_mut(self).get_isolate_mut()
+    }
+
     pub unsafe fn cast_local<F, T>(&mut self, f: F) -> Option<Local<'s, T>>
     where
       F: FnOnce(&mut Self) -> *const T,
@@ -126,7 +189,10 @@ pub(self) mod reference {
   }
 
   impl<'s> HandleScope<'s> {
-    pub unsafe fn cast_local<F, T>(&mut self, f: F) -> Option<Local<'s, T>>
+    pub(crate) unsafe fn cast_local<F, T>(
+      &mut self,
+      f: F,
+    ) -> Option<Local<'s, T>>
     where
       F: FnOnce(&mut Self) -> *const T,
     {
@@ -139,22 +205,35 @@ pub(self) mod reference {
     }
   }
 
-  unsafe impl<'s, P> Scope for HandleScope<'s, P> {}
+  unsafe impl<'s, Ctx> Scope for HandleScope<'s, Ctx> {}
 
-  impl<'s, P> Deref for HandleScope<'s, P> {
+  impl<'s> Deref for HandleScope<'s, ()> {
     type Target = Isolate;
     fn deref(&self) -> &Self::Target {
-      data::ScopeState::get(self).get_isolate()
+      self.get_isolate()
     }
   }
 
-  impl<'s, P> DerefMut for HandleScope<'s, P> {
+  impl<'s> DerefMut for HandleScope<'s, ()> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-      data::ScopeState::get_mut(self).get_isolate_mut()
+      self.get_isolate_mut()
     }
   }
 
-  impl<'s, P> Drop for HandleScope<'s, P> {
+  impl<'s> Deref for HandleScope<'s, Context> {
+    type Target = ContextScope<'s, ()>;
+    fn deref(&self) -> &Self::Target {
+      self.cast_ref()
+    }
+  }
+
+  impl<'s> DerefMut for HandleScope<'s, Context> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+      self.cast_mut()
+    }
+  }
+
+  impl<'s, Ctx> Drop for HandleScope<'s, Ctx> {
     fn drop(&mut self) {
       data::ScopeState::get_mut(self).notify_scope_dropped();
     }
@@ -305,6 +384,117 @@ pub(self) mod reference {
       data::ScopeState::get_mut(self).get_isolate_mut()
     }
   }
+
+  /// A CallbackScope can be used to bootstrap a HandleScope + ContextScope in a  
+  /// callback function that gets called by V8. Note that not creating a scope in
+  /// callback is not always allowed per the V8 API contract; e.g. you should
+  /// not create a scope inside an InteruptCallback.
+  ///
+  /// Note that for some callback types, rusty_v8 internally creates a scope and
+  /// passes it to embedder callback. Eventually we intend to wrap all callbacks
+  /// in a similar way, so the end user never needs to construct a
+  /// CallbackScope.
+  ///
+  /// A CallbackScope can be created from the following inputs:
+  ///   - `Local<Context>`
+  ///   - `Local<Message>`
+  ///   - `Local<Object>`
+  ///   - `Local<Promise>`
+  ///   - `Local<SharedArrayBuffer>`
+  ///   - `&PromiseRejectMessage`
+  ///   - `&FunctionCallbackInfo`
+  ///   - `&PropertyCallbackInfo`
+  #[derive(Debug)]
+  pub struct CallbackScope<'s> {
+    scope_state: NonNull<data::ScopeState>,
+    _phantom: PhantomData<&'s mut HandleScope<'s>>,
+  }
+
+  unsafe impl<'s> Scope for CallbackScope<'s> {}
+
+  impl<'s> Deref for CallbackScope<'s> {
+    type Target = HandleScope<'s>;
+    fn deref(&self) -> &Self::Target {
+      self.cast_ref()
+    }
+  }
+
+  impl<'s> DerefMut for CallbackScope<'s> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+      self.cast_mut()
+    }
+  }
+
+  impl<'s> Drop for CallbackScope<'s> {
+    fn drop(&mut self) {
+      data::ScopeState::get_mut(self).notify_scope_dropped();
+    }
+  }
+
+  impl<'s> CallbackScope<'s> {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new<P>(param: P) -> Self
+    where
+      P: NewCallbackScopeParam<'s>,
+    {
+      let isolate = param.get_isolate_mut();
+      let current_context = param.get_current_context_maybe();
+      let state =
+        data::ScopeState::new_callback_scope(isolate, current_context);
+      state.as_scope()
+    }
+  }
+
+  pub unsafe trait NewCallbackScopeParam<'s>: Copy + Sized {
+    fn get_current_context_maybe(self) -> Option<Local<'s, Context>> {
+      None
+    }
+    fn get_isolate_mut(self) -> &'s mut Isolate;
+  }
+
+  unsafe impl<'s> NewCallbackScopeParam<'s> for Local<'s, Context> {
+    fn get_current_context_maybe(self) -> Option<Local<'s, Context>> {
+      Some(self)
+    }
+    fn get_isolate_mut(self) -> &'s mut Isolate {
+      unsafe { &mut *raw::v8__Context__GetIsolate(&*self) }
+    }
+  }
+
+  unsafe impl<'s> NewCallbackScopeParam<'s> for Local<'s, Message> {
+    fn get_isolate_mut(self) -> &'s mut Isolate {
+      unsafe { &mut *raw::v8__Message__GetIsolate(&*self) }
+    }
+  }
+
+  unsafe impl<'s, T> NewCallbackScopeParam<'s> for T
+  where
+    T: Copy + Into<Local<'s, Object>>,
+  {
+    fn get_isolate_mut(self) -> &'s mut Isolate {
+      let object: Local<Object> = self.into();
+      unsafe { &mut *raw::v8__Object__GetIsolate(&*object) }
+    }
+  }
+
+  unsafe impl<'s> NewCallbackScopeParam<'s> for &'s PromiseRejectMessage<'s> {
+    fn get_isolate_mut(self) -> &'s mut Isolate {
+      let object: Local<Object> = self.get_promise().into();
+      unsafe { &mut *raw::v8__Object__GetIsolate(&*object) }
+    }
+  }
+
+  unsafe impl<'s> NewCallbackScopeParam<'s> for &'s FunctionCallbackInfo {
+    fn get_isolate_mut(self) -> &'s mut Isolate {
+      unsafe { &mut *raw::v8__FunctionCallbackInfo__GetIsolate(self) }
+    }
+  }
+
+  unsafe impl<'s> NewCallbackScopeParam<'s> for &'s PropertyCallbackInfo {
+    fn get_isolate_mut(self) -> &'s mut Isolate {
+      unsafe { &mut *raw::v8__PropertyCallbackInfo__GetIsolate(self) }
+    }
+  }
 }
 
 pub(crate) mod data {
@@ -313,7 +503,7 @@ pub(crate) mod data {
   #[derive(Debug)]
   pub struct ScopeState {
     pub(super) isolate: NonNull<Isolate>,
-    pub(super) context: Option<NonNull<Context>>,
+    pub(super) context: Cell<Option<NonNull<Context>>>,
     pub(super) escape_slot: Option<NonNull<raw::EscapeSlot>>,
     parent: Option<NonNull<ScopeState>>,
     deferred_drop: bool,
@@ -326,7 +516,7 @@ pub(crate) mod data {
       context: Local<'s, Context>,
     ) -> &'s mut Self {
       Self::new_with(isolate, move |state| {
-        state.context = NonNull::new(&*context as *const _ as *mut Context);
+        state.context.set(Some(context.as_non_null()));
         state.data = ScopeData::ContextScope(raw::ContextScope::uninit());
         match &mut state.data {
           ScopeData::ContextScope(raw) => raw.init(&*context),
@@ -360,6 +550,17 @@ pub(crate) mod data {
       })
     }
 
+    pub(super) fn new_callback_scope<'s>(
+      isolate: &'s mut Isolate,
+      current_context: Option<Local<'s, Context>>,
+    ) -> &'s mut Self {
+      Self::new_with(isolate, |state| {
+        state
+          .context
+          .set(current_context.map(|cx| cx.as_non_null()));
+      })
+    }
+
     // TODO(piscisaureus): use something more efficient than a separate heap
     // allocation for every scope.
     fn new_with<F>(isolate: &mut Isolate, init_fn: F) -> &mut Self
@@ -371,7 +572,7 @@ pub(crate) mod data {
       let context = parent
         .as_mut()
         .map(|p| unsafe { p.as_mut() })
-        .and_then(|p| p.context)
+        .and_then(|p| p.context.get())
         .map(NonNull::from);
       let escape_slot = parent
         .as_mut()
@@ -381,7 +582,7 @@ pub(crate) mod data {
       let state = Self {
         isolate: isolate_nn,
         parent,
-        context,
+        context: Cell::new(context),
         escape_slot,
         deferred_drop: false,
         data: ScopeData::default(),
@@ -404,7 +605,7 @@ pub(crate) mod data {
     }
 
     pub(super) fn notify_scope_dropped(&mut self) {
-      // This function is called when the `reference::Scope` object is dropped.
+      // This function is called when the `api::Scope` object is dropped.
       // With regard to (escapable) handle scopes: the Rust borrow checker
       // allows these to be dropped before all the local handles that were
       // created inside the HandleScope have gone out of scope. In order to
@@ -424,19 +625,19 @@ pub(crate) mod data {
       }
     }
 
-    pub(super) fn as_scope<S: reference::Scope>(&mut self) -> S {
+    pub(super) fn as_scope<S: api::Scope>(&mut self) -> S {
       assert_eq!(size_of::<&mut Self>(), size_of::<S>());
       let self_nn = NonNull::from(self);
       unsafe { transmute_copy(&self_nn) }
     }
 
-    pub(super) fn get<S: reference::Scope>(scope: &S) -> &Self {
+    pub(super) fn get<S: api::Scope>(scope: &S) -> &Self {
       let self_nn = unsafe { *(scope as *const _ as *const NonNull<Self>) };
       Self::touch(self_nn);
       unsafe { &*self_nn.as_ptr() }
     }
 
-    pub(super) fn get_mut<S: reference::Scope>(scope: &mut S) -> &mut Self {
+    pub(super) fn get_mut<S: api::Scope>(scope: &mut S) -> &mut Self {
       let self_nn = unsafe { *(scope as *mut _ as *mut NonNull<Self>) };
       Self::touch(self_nn);
       unsafe { &mut *self_nn.as_ptr() }
@@ -605,6 +806,11 @@ mod raw {
   }
 
   extern "C" {
+    // Used by ContextScope.
+    pub(super) fn v8__Context__GetIsolate(this: *const Context)
+      -> *mut Isolate;
+    pub(super) fn v8__Context__Enter(this: *const Context);
+    pub(super) fn v8__Context__Exit(this: *const Context);
     pub(super) fn v8__Isolate__GetCurrentContext(
       isolate: *mut Isolate,
     ) -> *const Context;
@@ -612,23 +818,21 @@ mod raw {
       isolate: *mut Isolate,
     ) -> *const Context;
 
-    pub(super) fn v8__Context__GetIsolate(this: *const Context)
-      -> *mut Isolate;
-    pub(super) fn v8__Context__Enter(this: *const Context);
-    pub(super) fn v8__Context__Exit(this: *const Context);
-
+    // Used by HandleScope/EscapableHandleScope.
     pub(super) fn v8__HandleScope__CONSTRUCT(
       buf: *mut MaybeUninit<HandleScope>,
       isolate: *mut Isolate,
     );
     pub(super) fn v8__HandleScope__DESTRUCT(this: *mut HandleScope);
 
+    // Used by EscapeSlot (part of EscapableHandleScope).
     pub(super) fn v8__Undefined(isolate: *mut Isolate) -> *const Primitive;
     pub(super) fn v8__Local__New(
       isolate: *mut Isolate,
       other: *const Data,
     ) -> *const Data;
 
+    // Used by TryCatch.
     pub(super) fn v8__TryCatch__CONSTRUCT(
       buf: *mut MaybeUninit<TryCatch>,
       isolate: *mut Isolate,
@@ -655,6 +859,17 @@ mod raw {
       this: *mut TryCatch,
       value: bool,
     );
+
+    // Used by CallbackScope.
+    pub(super) fn v8__Message__GetIsolate(this: *const Message)
+      -> *mut Isolate;
+    pub(super) fn v8__Object__GetIsolate(this: *const Object) -> *mut Isolate;
+    pub(super) fn v8__FunctionCallbackInfo__GetIsolate(
+      this: *const FunctionCallbackInfo,
+    ) -> *mut Isolate;
+    pub(super) fn v8__PropertyCallbackInfo__GetIsolate(
+      this: *const PropertyCallbackInfo,
+    ) -> *mut Isolate;
   }
 }
 
@@ -727,8 +942,9 @@ mod tests {
       let buffer_len = buffer.len().try_into().ok()?;
       unsafe {
         scope.cast_local(|scope| {
+          let isolate: &mut Isolate = scope;
           v8__String__NewFromUtf8(
-            &mut **scope,
+            isolate,
             buffer.as_ptr() as *const char,
             Default::default(),
             buffer_len,
