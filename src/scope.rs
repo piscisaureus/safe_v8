@@ -27,7 +27,7 @@ use crate::Value;
 
 #[doc(inline)]
 pub use api::{CallbackScope, ContextScope, EscapableHandleScope, HandleScope};
-pub(crate) use data::ScopeData;
+pub(crate) use data::{ScopeAllocation, ScopeData};
 
 mod api {
   use super::*;
@@ -564,6 +564,76 @@ mod api {
 mod data {
   use super::*;
 
+  #[derive(Default)]
+  pub(crate) struct ScopeAllocation {
+    previous: Option<NonNull<Self>>,
+    next: Option<Box<Self>>,
+    data: Option<ScopeData>,
+  }
+
+  impl ScopeAllocation {
+    fn into_non_null(self: Box<Self>) -> NonNull<Self> {
+      let p = Box::into_raw(self);
+      unsafe { NonNull::new_unchecked(p) }
+    }
+
+    unsafe fn from_non_null(self_nn: NonNull<Self>) -> Box<Self> {
+      let p = self_nn.as_ptr();
+      unsafe { Box::from_raw(p) }
+    }
+
+    fn alloc_new() -> Box<Self> {
+      Box::new(Self::default())
+    }
+
+    fn alloc_next(&mut self) -> NonNull<Self> {
+      let self_nn = NonNull::new(self);
+      if self.next.is_none() {
+        self.next.replace(Box::new(Self {
+          previous: self_nn,
+          ..Self::default()
+        }));
+      }
+      let allocation = self.next.as_mut().unwrap();
+      debug_assert!(allocation.data.is_none());
+      NonNull::from(&mut *self)
+    }
+
+    fn alloc(maybe_previous: Option<&mut Self>) -> NonNull<Self> {
+      match maybe_previous {
+        Some(a) => a.alloc_next(),
+        None => Self::alloc_new().into_non_null(),
+      }
+    }
+
+    fn free(&mut self) -> Option<NonNull<Self>> {
+      let data = self.data.take();
+      debug_assert!(data.is_some());
+      self.previous
+    }
+
+    fn get_data(&self) -> &Option<ScopeData> {
+      &self.data
+    }
+
+    fn get_data_mut(&mut self) -> &mut Option<ScopeData> {
+      &mut self.data
+    }
+  }
+
+  impl Deref for ScopeAllocation {
+    type Target = ScopeData;
+    fn deref(&self) -> &Self::Target {
+      self.data.as_ref().unwrap()
+    }
+  }
+
+  impl DerefMut for ScopeAllocation {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+      self.data.as_mut().unwrap()
+    }
+  }
+
   #[derive(Debug)]
   pub struct ScopeData {
     pub(super) isolate: NonNull<Isolate>,
@@ -579,7 +649,7 @@ mod data {
       isolate: &'s mut Isolate,
       context: Local<'s, Context>,
     ) -> &'s mut Self {
-      Self::new_with(isolate, move |data| {
+      Self::enter_with(isolate, move |data| {
         data.context.set(Some(context.as_non_null()));
         data.type_specific_data =
           ScopeTypeSpecificData::ContextScope(raw::ContextScope::zeroed());
@@ -591,7 +661,7 @@ mod data {
     }
 
     pub(super) fn new_handle_scope(isolate: &mut Isolate) -> &mut Self {
-      Self::new_with(isolate, |data| {
+      Self::enter_with(isolate, |data| {
         data.type_specific_data =
           ScopeTypeSpecificData::HandleScope(raw::HandleScope::zeroed());
         match &mut data.type_specific_data {
@@ -606,7 +676,7 @@ mod data {
     pub(super) fn new_escapable_handle_scope(
       isolate: &mut Isolate,
     ) -> &mut Self {
-      Self::new_with(isolate, |data| {
+      Self::enter_with(isolate, |data| {
         data.type_specific_data = ScopeTypeSpecificData::EscapableHandleScope(
           raw::EscapableHandleScope::zeroed(),
         );
@@ -623,7 +693,7 @@ mod data {
       isolate: &'s mut Isolate,
       maybe_current_context: Option<Local<'s, Context>>,
     ) -> &'s mut Self {
-      Self::new_with(isolate, |data| {
+      Self::enter_with(isolate, |data| {
         data
           .context
           .set(maybe_current_context.map(|cx| cx.as_non_null()));
@@ -632,45 +702,45 @@ mod data {
 
     // TODO(piscisaureus): use something more efficient than a separate heap
     // allocation for every scope.
-    fn new_with<F>(isolate: &mut Isolate, init_fn: F) -> &mut Self
+    fn enter_with<F>(isolate: &mut Isolate, init_fn: F) -> &mut Self
     where
       F: FnOnce(&mut Self),
     {
       let isolate_nn = unsafe { NonNull::new_unchecked(isolate) };
-      let mut parent = isolate.get_current_scope();
-      let context = parent
+      let mut maybe_previous = isolate
+        .get_current_scope()
         .as_mut()
-        .map(|p| unsafe { p.as_mut() })
+        .map(|p| unsafe { p.as_mut() });
+      let context = maybe_previous
         .and_then(|p| p.context.get())
         .map(NonNull::from);
-      let escape_slot = parent
-        .as_mut()
-        .map(|p| unsafe { p.as_mut() })
+      let escape_slot = maybe_previous
         .and_then(|p| p.escape_slot)
         .map(NonNull::from);
-      let data = Self {
+      let mut allocation_nn = ScopeAllocation::alloc(maybe_previous);
+      let mut allocation = unsafe { allocation_nn.as_mut() };
+      allocation.get_data_mut().replace(Self {
         isolate: isolate_nn,
-        parent,
+        parent: None, //parent,
         context: Cell::new(context),
         escape_slot,
         deferred_drop: false,
         type_specific_data: ScopeTypeSpecificData::default(),
-      };
-      let mut data_box = Box::new(data);
-      (init_fn)(&mut *data_box);
-      let data_ptr = Box::into_raw(data_box);
-      isolate.set_current_scope(NonNull::new(data_ptr));
-      unsafe { &mut *data_ptr }
+      });
+      (init_fn)(allocation);
+      isolate.set_current_scope(Some(allocation_nn));
+      unsafe { allocation }
     }
 
-    fn drop(&mut self) {
+    fn exit_scope(&mut self) {
+      let _ = self.
       // Make our parent scope 'current' again.
-      let parent = self.parent;
-      let isolate = self.get_isolate_mut();
-      isolate.set_current_scope(parent);
-
+      //let parent = self.parent;
+      //let isolate = self.get_isolate_mut();
+      //isolate.set_current_scope(parent);
+      //
       // Turn the &mut self pointer back into a box and drop it.
-      let _ = unsafe { Box::from_raw(self) };
+      //let _ = unsafe { Box::from_raw(self) };
     }
 
     pub(super) fn notify_scope_dropped(&mut self) {
@@ -689,8 +759,8 @@ mod data {
           assert_eq!(prev_flag_value, false);
         }
         _ => {
-          // Regular, immediate drop.
-          self.drop();
+          // Regular, immediate exit.
+          self.drop_data();
         }
       }
     }
