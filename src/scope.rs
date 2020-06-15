@@ -568,7 +568,7 @@ mod data {
   #[derive(Debug)]
   pub struct ScopeData {
     // The first three fields do not change after initialization, and are even
-    // valid when a `ScopeData` allocation sits on the freelist.
+    // valid when a `ScopeData` allocation sits unused on the freelist.
     parent: Option<NonNull<ScopeData>>,
     next_free: Option<Box<ScopeData>>,
     pub(super) isolate: NonNull<Isolate>,
@@ -576,16 +576,16 @@ mod data {
     pub(super) context: Cell<Option<NonNull<Context>>>,
     pub(super) escape_slot: Option<NonNull<raw::EscapeSlot>>,
     deferred_drop: bool,
-    type_specific_data: ScopeTypeSpecificData,
+    scope_type_specific_data: ScopeTypeSpecificData,
   }
 
   impl Default for ScopeData {
     fn default() -> Self {
+      let mut buf = MaybeUninit::<Self>::zeroed();
+      let p = buf.as_mut_ptr();
       unsafe {
-        let mut buf = MaybeUninit::<Self>::zeroed();
-        let p = buf.as_mut_ptr();
         ptr::write(&mut (*p).isolate, NonNull::dangling());
-        ptr::write(&mut (*p).type_specific_data, Default::default());
+        ptr::write(&mut (*p).scope_type_specific_data, Default::default());
         buf.assume_init()
       }
     }
@@ -596,11 +596,11 @@ mod data {
       isolate: &'s mut Isolate,
       context: Local<'s, Context>,
     ) -> &'s mut Self {
-      Self::construct_with(isolate, move |data| {
+      Self::enter_scope_with(isolate, move |data| {
         data.context.set(Some(context.as_non_null()));
-        data.type_specific_data =
+        data.scope_type_specific_data =
           ScopeTypeSpecificData::ContextScope(raw::ContextScope::zeroed());
-        match &mut data.type_specific_data {
+        match &mut data.scope_type_specific_data {
           ScopeTypeSpecificData::ContextScope(raw) => raw.init(&*context),
           _ => unreachable!(),
         }
@@ -608,10 +608,10 @@ mod data {
     }
 
     pub(super) fn new_handle_scope(isolate: &mut Isolate) -> &mut Self {
-      Self::construct_with(isolate, |data| {
-        data.type_specific_data =
+      Self::enter_scope_with(isolate, |data| {
+        data.scope_type_specific_data =
           ScopeTypeSpecificData::HandleScope(raw::HandleScope::zeroed());
-        match &mut data.type_specific_data {
+        match &mut data.scope_type_specific_data {
           ScopeTypeSpecificData::HandleScope(raw) => {
             raw.init(data.isolate.as_ptr())
           }
@@ -623,11 +623,12 @@ mod data {
     pub(super) fn new_escapable_handle_scope(
       isolate: &mut Isolate,
     ) -> &mut Self {
-      Self::construct_with(isolate, |data| {
-        data.type_specific_data = ScopeTypeSpecificData::EscapableHandleScope(
-          raw::EscapableHandleScope::zeroed(),
-        );
-        match &mut data.type_specific_data {
+      Self::enter_scope_with(isolate, |data| {
+        data.scope_type_specific_data =
+          ScopeTypeSpecificData::EscapableHandleScope(
+            raw::EscapableHandleScope::zeroed(),
+          );
+        match &mut data.scope_type_specific_data {
           ScopeTypeSpecificData::EscapableHandleScope(raw) => {
             data.escape_slot = raw.init(data.isolate.as_ptr());
           }
@@ -640,14 +641,14 @@ mod data {
       isolate: &'s mut Isolate,
       maybe_current_context: Option<Local<'s, Context>>,
     ) -> &'s mut Self {
-      Self::construct_with(isolate, |data| {
+      Self::enter_scope_with(isolate, |data| {
         data
           .context
           .set(maybe_current_context.map(|cx| cx.as_non_null()));
       })
     }
 
-    fn construct_with<F>(isolate: &mut Isolate, init_fn: F) -> &mut Self
+    fn enter_scope_with<F>(isolate: &mut Isolate, init_fn: F) -> &mut Self
     where
       F: FnOnce(&mut Self),
     {
@@ -674,7 +675,7 @@ mod data {
         }
         Some(Some(next_free)) => {
           debug_assert_eq!(next_free.isolate, isolate_nn);
-          debug_assert!(next_free.type_specific_data.is_none());
+          debug_assert!(next_free.scope_type_specific_data.is_none());
           next_free.as_mut()
         }
       };
@@ -690,7 +691,7 @@ mod data {
           .and_then(|p| p.escape_slot)
           .map(NonNull::from),
         deferred_drop: false,
-        type_specific_data: ScopeTypeSpecificData::default(),
+        scope_type_specific_data: ScopeTypeSpecificData::default(),
         ..take(data)
       };
       (init_fn)(data);
@@ -698,10 +699,10 @@ mod data {
       data
     }
 
-    fn destruct(&mut self) {
+    fn exit_scope(&mut self) {
       // Clear out the scope type specific data field. The other fields don't
       // have destructors and there's no need to do any cleanup on them.
-      take(&mut self.type_specific_data);
+      take(&mut self.scope_type_specific_data);
 
       // Make the previous scope 'current' again.
       let parent = self.parent;
@@ -732,7 +733,7 @@ mod data {
       // these locals into invalid references, a (Escapable)HandleScope will be
       // kept alive for now; It'll be actually dropped when the user touches
       // the parent scope.
-      match &self.type_specific_data {
+      match &self.scope_type_specific_data {
         ScopeTypeSpecificData::HandleScope(_)
         | ScopeTypeSpecificData::EscapableHandleScope(_) => {
           // Defer drop.
@@ -741,7 +742,7 @@ mod data {
         }
         _ => {
           // Regular, immediate drop.
-          self.destruct();
+          self.exit_scope();
         }
       }
     }
@@ -785,7 +786,7 @@ mod data {
           Some(current_scope_nn) if current_scope_nn == self_nn => break,
           Some(mut current_scope_nn)
             if unsafe { current_scope_nn.as_ref().deferred_drop } =>
-          unsafe { current_scope_nn.as_mut().destruct() }
+          unsafe { current_scope_nn.as_mut().exit_scope() }
           _ => panic!("can't use scope that has been shadowed by another"),
         }
       }
@@ -798,7 +799,7 @@ mod data {
           None => break,
           Some(mut current_scope_nn)
             if unsafe { current_scope_nn.as_ref().deferred_drop } =>
-          unsafe { current_scope_nn.as_mut().destruct() }
+          unsafe { current_scope_nn.as_mut().exit_scope() }
           _ => panic!("can't reset scopes while they're in use"),
         }
       }
