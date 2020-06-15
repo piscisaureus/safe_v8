@@ -3,6 +3,7 @@ use std::cell::Cell;
 use std::marker::PhantomData;
 use std::mem::replace;
 use std::mem::size_of;
+use std::mem::take;
 use std::mem::MaybeUninit;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
@@ -27,7 +28,7 @@ use crate::Value;
 
 #[doc(inline)]
 pub use api::{CallbackScope, ContextScope, EscapableHandleScope, HandleScope};
-pub(crate) use data::{ScopeAllocation, ScopeData};
+pub(crate) use data::ScopeData;
 
 mod api {
   use super::*;
@@ -564,84 +565,30 @@ mod api {
 mod data {
   use super::*;
 
-  #[derive(Default)]
-  pub(crate) struct ScopeAllocation {
-    previous: Option<NonNull<Self>>,
-    next: Option<Box<Self>>,
-    data: Option<ScopeData>,
-  }
-
-  impl ScopeAllocation {
-    fn into_non_null(self: Box<Self>) -> NonNull<Self> {
-      let p = Box::into_raw(self);
-      unsafe { NonNull::new_unchecked(p) }
-    }
-
-    unsafe fn from_non_null(self_nn: NonNull<Self>) -> Box<Self> {
-      let p = self_nn.as_ptr();
-      unsafe { Box::from_raw(p) }
-    }
-
-    fn alloc_new() -> Box<Self> {
-      Box::new(Self::default())
-    }
-
-    fn alloc_next(&mut self) -> NonNull<Self> {
-      let self_nn = NonNull::new(self);
-      if self.next.is_none() {
-        self.next.replace(Box::new(Self {
-          previous: self_nn,
-          ..Self::default()
-        }));
-      }
-      let allocation = self.next.as_mut().unwrap();
-      debug_assert!(allocation.data.is_none());
-      NonNull::from(&mut *self)
-    }
-
-    fn alloc(maybe_previous: Option<&mut Self>) -> NonNull<Self> {
-      match maybe_previous {
-        Some(a) => a.alloc_next(),
-        None => Self::alloc_new().into_non_null(),
-      }
-    }
-
-    fn free(&mut self) -> Option<NonNull<Self>> {
-      let data = self.data.take();
-      debug_assert!(data.is_some());
-      self.previous
-    }
-
-    fn get_data(&self) -> &Option<ScopeData> {
-      &self.data
-    }
-
-    fn get_data_mut(&mut self) -> &mut Option<ScopeData> {
-      &mut self.data
-    }
-  }
-
-  impl Deref for ScopeAllocation {
-    type Target = ScopeData;
-    fn deref(&self) -> &Self::Target {
-      self.data.as_ref().unwrap()
-    }
-  }
-
-  impl DerefMut for ScopeAllocation {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-      self.data.as_mut().unwrap()
-    }
-  }
-
   #[derive(Debug)]
   pub struct ScopeData {
+    // The first three fields do not change after initialization, and are even
+    // valid when a `ScopeData` allocation sits on the freelist.
+    parent: Option<NonNull<ScopeData>>,
+    next_free: Option<Box<ScopeData>>,
     pub(super) isolate: NonNull<Isolate>,
+    // The following fields are only valid for entered scopes.
     pub(super) context: Cell<Option<NonNull<Context>>>,
     pub(super) escape_slot: Option<NonNull<raw::EscapeSlot>>,
-    parent: Option<NonNull<ScopeData>>,
     deferred_drop: bool,
     type_specific_data: ScopeTypeSpecificData,
+  }
+
+  impl Default for ScopeData {
+    fn default() -> Self {
+      unsafe {
+        let mut buf = MaybeUninit::<Self>::zeroed();
+        let p = buf.as_mut_ptr();
+        ptr::write(&mut (*p).isolate, NonNull::dangling());
+        ptr::write(&mut (*p).type_specific_data, Default::default());
+        buf.assume_init()
+      }
+    }
   }
 
   impl ScopeData {
@@ -649,7 +596,7 @@ mod data {
       isolate: &'s mut Isolate,
       context: Local<'s, Context>,
     ) -> &'s mut Self {
-      Self::enter_with(isolate, move |data| {
+      Self::construct_with(isolate, move |data| {
         data.context.set(Some(context.as_non_null()));
         data.type_specific_data =
           ScopeTypeSpecificData::ContextScope(raw::ContextScope::zeroed());
@@ -661,7 +608,7 @@ mod data {
     }
 
     pub(super) fn new_handle_scope(isolate: &mut Isolate) -> &mut Self {
-      Self::enter_with(isolate, |data| {
+      Self::construct_with(isolate, |data| {
         data.type_specific_data =
           ScopeTypeSpecificData::HandleScope(raw::HandleScope::zeroed());
         match &mut data.type_specific_data {
@@ -676,7 +623,7 @@ mod data {
     pub(super) fn new_escapable_handle_scope(
       isolate: &mut Isolate,
     ) -> &mut Self {
-      Self::enter_with(isolate, |data| {
+      Self::construct_with(isolate, |data| {
         data.type_specific_data = ScopeTypeSpecificData::EscapableHandleScope(
           raw::EscapableHandleScope::zeroed(),
         );
@@ -693,64 +640,98 @@ mod data {
       isolate: &'s mut Isolate,
       maybe_current_context: Option<Local<'s, Context>>,
     ) -> &'s mut Self {
-      Self::enter_with(isolate, |data| {
+      Self::construct_with(isolate, |data| {
         data
           .context
           .set(maybe_current_context.map(|cx| cx.as_non_null()));
       })
     }
 
-    // TODO(piscisaureus): use something more efficient than a separate heap
-    // allocation for every scope.
-    fn enter_with<F>(isolate: &mut Isolate, init_fn: F) -> &mut Self
+    fn construct_with<F>(isolate: &mut Isolate, init_fn: F) -> &mut Self
     where
       F: FnOnce(&mut Self),
     {
       let isolate_nn = unsafe { NonNull::new_unchecked(isolate) };
-      let mut maybe_previous = isolate
-        .get_current_scope()
-        .as_mut()
-        .map(|p| unsafe { p.as_mut() });
-      let context = maybe_previous
-        .and_then(|p| p.context.get())
-        .map(NonNull::from);
-      let escape_slot = maybe_previous
-        .and_then(|p| p.escape_slot)
-        .map(NonNull::from);
-      let mut allocation_nn = ScopeAllocation::alloc(maybe_previous);
-      let mut allocation = unsafe { allocation_nn.as_mut() };
-      allocation.get_data_mut().replace(Self {
-        isolate: isolate_nn,
-        parent: None, //parent,
-        context: Cell::new(context),
-        escape_slot,
+      let parent_nn = isolate.get_current_scope();
+      let data = match parent_nn
+        .map(NonNull::as_ptr)
+        .map(|p| unsafe { &mut (*p).next_free })
+      {
+        None => {
+          let b = Box::new(Self {
+            isolate: isolate_nn,
+            ..Self::default()
+          });
+          Box::leak(b)
+        }
+        Some(next_free @ None) => {
+          next_free.replace(Box::new(Self {
+            isolate: isolate_nn,
+            parent: parent_nn,
+            ..Self::default()
+          }));
+          next_free.as_mut().unwrap()
+        }
+        Some(Some(next_free)) => {
+          debug_assert_eq!(next_free.isolate, isolate_nn);
+          debug_assert!(next_free.type_specific_data.is_none());
+          next_free.as_mut()
+        }
+      };
+      *data = ScopeData {
+        context: parent_nn
+          .map(NonNull::as_ptr)
+          .map(|p| unsafe { &mut *p })
+          .and_then(|p| p.context.get())
+          .into(),
+        escape_slot: parent_nn
+          .map(NonNull::as_ptr)
+          .map(|p| unsafe { &mut *p })
+          .and_then(|p| p.escape_slot)
+          .map(NonNull::from),
         deferred_drop: false,
         type_specific_data: ScopeTypeSpecificData::default(),
-      });
-      (init_fn)(allocation);
-      isolate.set_current_scope(Some(allocation_nn));
-      unsafe { allocation }
+        ..take(data)
+      };
+      (init_fn)(data);
+      isolate.set_current_scope(NonNull::new(data));
+      data
     }
 
-    fn exit_scope(&mut self) {
-      let _ = self.
-      // Make our parent scope 'current' again.
-      //let parent = self.parent;
-      //let isolate = self.get_isolate_mut();
-      //isolate.set_current_scope(parent);
-      //
-      // Turn the &mut self pointer back into a box and drop it.
-      //let _ = unsafe { Box::from_raw(self) };
+    fn destruct(&mut self) {
+      // Clear out the scope type specific data field. The other fields don't
+      // have destructors and there's no need to do any cleanup on them.
+      take(&mut self.type_specific_data);
+
+      // Make the previous scope 'current' again.
+      let parent = self.parent;
+      let isolate = self.get_isolate_mut();
+      isolate.set_current_scope(parent);
+
+      // If there is no previous scope, that means we're exiting the
+      // Isolate/SnapshotCreator for good, so the freelist of empty ScopeData
+      // allocations needs to be dropped.
+      if parent.is_none() {
+        let b = unsafe { Box::from_raw(self) };
+        let mut c = 1;
+        let mut br = &b;
+        while let Some(k) = &br.next_free {
+          c += 1;
+          br = k;
+        }
+        eprintln!("{} scope data boxed released", c);
+      }
     }
 
     pub(super) fn notify_scope_dropped(&mut self) {
-      // This function is called when the `api::Scope` object is dropped.
-      // With regard to (escapable) handle scopes: the Rust borrow checker
-      // allows these to be dropped before all the local handles that were
-      // created inside the HandleScope have gone out of scope. In order to
-      // avoid turning these locals into invalid references the HandleScope is
-      // kept alive for now -- it'll be actually dropped when the user touches
-      // the HandleScope's parent scope.
+      // This function is called when any of the publicly exported scope.
+      // objects (e.g `HandleScope`, `ContextScope`) is dropped.
+      // With respect to (Escapable)HandleScope: the Rust borrow checker allows
+      // them to be dropped a little bit earlier than the local handles that
+      // were created in these handle-keeping scopes. In order to avoid turning
+      // these locals into invalid references, a (Escapable)HandleScope will be
+      // kept alive for now; It'll be actually dropped when the user touches
+      // the parent scope.
       match &self.type_specific_data {
         ScopeTypeSpecificData::HandleScope(_)
         | ScopeTypeSpecificData::EscapableHandleScope(_) => {
@@ -759,8 +740,8 @@ mod data {
           assert_eq!(prev_flag_value, false);
         }
         _ => {
-          // Regular, immediate exit.
-          self.drop_data();
+          // Regular, immediate drop.
+          self.destruct();
         }
       }
     }
@@ -804,7 +785,7 @@ mod data {
           Some(current_scope_nn) if current_scope_nn == self_nn => break,
           Some(mut current_scope_nn)
             if unsafe { current_scope_nn.as_ref().deferred_drop } =>
-          unsafe { current_scope_nn.as_mut().drop() }
+          unsafe { current_scope_nn.as_mut().destruct() }
           _ => panic!("can't use scope that has been shadowed by another"),
         }
       }
@@ -817,7 +798,7 @@ mod data {
           None => break,
           Some(mut current_scope_nn)
             if unsafe { current_scope_nn.as_ref().deferred_drop } =>
-          unsafe { current_scope_nn.as_mut().drop() }
+          unsafe { current_scope_nn.as_mut().destruct() }
           _ => panic!("can't reset scopes while they're in use"),
         }
       }
@@ -835,6 +816,15 @@ mod data {
   impl Default for ScopeTypeSpecificData {
     fn default() -> Self {
       Self::None
+    }
+  }
+
+  impl ScopeTypeSpecificData {
+    pub fn is_none(&self) -> bool {
+      match self {
+        Self::None => true,
+        _ => false,
+      }
     }
   }
 }
