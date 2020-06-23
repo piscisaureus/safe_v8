@@ -299,10 +299,10 @@ impl Exception {
     message: Local<String>,
     contructor: unsafe extern "C" fn(*const String) -> *const Value,
   ) -> Local<'s, Value> {
-    scope.get_isolate_mut().enter();
+    scope.enter_isolate();
     let error =
       unsafe { scope.cast_local(|_| (contructor)(&*message)) }.unwrap();
-    scope.get_isolate_mut().exit();
+    scope.exit_isolate();
     error
   }
 

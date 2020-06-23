@@ -549,48 +549,45 @@ fn try_catch() {
     let scope = &mut v8::ContextScope::new(scope, context);
     {
       // Error thrown - should be caught.
-      let mut try_catch = v8::TryCatch::new(scope);
-      let tc = try_catch.enter();
-      let result = eval(scope, context, "throw new Error('foo')");
+      let try_catch = &mut v8::TryCatch::new(scope);
+      let result = eval(try_catch, context, "throw new Error('foo')");
       assert!(result.is_none());
-      assert!(tc.has_caught());
-      assert!(tc.exception(scope).is_some());
-      assert!(tc.stack_trace(scope, context).is_some());
-      assert!(tc.message(scope).is_some());
+      assert!(try_catch.has_caught());
+      assert!(try_catch.exception().is_some());
+      assert!(try_catch.stack_trace().is_some());
+      assert!(try_catch.message().is_some());
       assert_eq!(
-        tc.message(scope)
+        try_catch
+          .message()
           .unwrap()
-          .get(scope)
-          .to_rust_string_lossy(scope),
+          .get(try_catch)
+          .to_rust_string_lossy(try_catch),
         "Uncaught Error: foo"
       );
     };
     {
       // No error thrown.
-      let mut try_catch = v8::TryCatch::new(scope);
-      let tc = try_catch.enter();
-      let result = eval(scope, context, "1 + 1");
+      let try_catch = &mut v8::TryCatch::new(scope);
+      let result = eval(try_catch, context, "1 + 1");
       assert!(result.is_some());
-      assert!(!tc.has_caught());
-      assert!(tc.exception(scope).is_none());
-      assert!(tc.stack_trace(scope, context).is_none());
-      assert!(tc.message(scope).is_none());
-      assert!(tc.rethrow().is_none());
+      assert!(!try_catch.has_caught());
+      assert!(try_catch.exception().is_none());
+      assert!(try_catch.stack_trace().is_none());
+      assert!(try_catch.message().is_none());
+      assert!(try_catch.rethrow().is_none());
     };
     {
       // Rethrow and reset.
-      let mut try_catch_1 = v8::TryCatch::new(scope);
-      let tc1 = try_catch_1.enter();
+      let try_catch_1 = &mut v8::TryCatch::new(scope);
       {
-        let mut try_catch_2 = v8::TryCatch::new(scope);
-        let tc2 = try_catch_2.enter();
-        eval(scope, context, "throw 'bar'");
-        assert!(tc2.has_caught());
-        assert!(tc2.rethrow().is_some());
-        tc2.reset();
-        assert!(!tc2.has_caught());
+        let try_catch_2 = &mut v8::TryCatch::new(try_catch_1);
+        eval(try_catch_2, context, "throw 'bar'");
+        assert!(try_catch_2.has_caught());
+        assert!(try_catch_2.rethrow().is_some());
+        try_catch_2.reset();
+        assert!(!try_catch_2.has_caught());
       }
-      assert!(tc1.has_caught());
+      assert!(try_catch_1.has_caught());
     };
   }
 }
@@ -603,15 +600,14 @@ fn try_catch_caught_lifetime() {
   let context = v8::Context::new(scope);
   let scope = &mut v8::ContextScope::new(scope, context);
   let (caught_exc, caught_msg) = {
-    let mut try_catch = v8::TryCatch::new(scope);
-    let try_catch = try_catch.enter();
+    let try_catch = &mut v8::TryCatch::new(scope);
     // Throw exception.
-    let msg = v8::String::new(scope, "DANG!").unwrap();
-    let exc = v8::Exception::type_error(scope, msg);
-    scope.throw_exception(exc);
+    let msg = v8::String::new(try_catch, "DANG!").unwrap();
+    let exc = v8::Exception::type_error(try_catch, msg);
+    try_catch.throw_exception(exc);
     // Catch exception.
-    let caught_exc = try_catch.exception(scope).unwrap();
-    let caught_msg = try_catch.message(scope).unwrap();
+    let caught_exc = try_catch.exception().unwrap();
+    let caught_msg = try_catch.message().unwrap();
     // Move `caught_exc` and `caught_msg` out of the extent of the TryCatch,
     // but still within the extent of the enclosing HandleScope.
     (caught_exc, caught_msg)
@@ -637,15 +633,14 @@ fn throw_exception() {
     let context = v8::Context::new(scope);
     let scope = &mut v8::ContextScope::new(scope, context);
     {
-      let mut try_catch = v8::TryCatch::new(scope);
-      let tc = try_catch.enter();
-      let exception = v8::String::new(scope, "boom").unwrap();
-      scope.throw_exception(exception.into());
-      assert!(tc.has_caught());
-      assert!(tc
-        .exception(scope)
+      let try_catch = &mut v8::TryCatch::new(scope);
+      let exception = v8::String::new(try_catch, "boom").unwrap();
+      try_catch.throw_exception(exception.into());
+      assert!(try_catch.has_caught());
+      assert!(try_catch
+        .exception()
         .unwrap()
-        .strict_equals(v8::String::new(scope, "boom").unwrap().into()));
+        .strict_equals(v8::String::new(try_catch, "boom").unwrap().into()));
     };
   }
 }
@@ -1593,8 +1588,7 @@ fn module_instantiation_failures1() {
 
     // Instantiation should fail.
     {
-      let mut try_catch = v8::TryCatch::new(scope);
-      let tc = try_catch.enter();
+      let try_catch = &mut v8::TryCatch::new(scope);
       fn resolve_callback<'a>(
         context: v8::Local<'a, v8::Context>,
         _specifier: v8::Local<'a, v8::String>,
@@ -1608,11 +1602,11 @@ fn module_instantiation_failures1() {
       }
       let result = module.instantiate_module(context, resolve_callback);
       assert!(result.is_none());
-      assert!(tc.has_caught());
-      assert!(tc
-        .exception(scope)
+      assert!(try_catch.has_caught());
+      assert!(try_catch
+        .exception()
         .unwrap()
-        .strict_equals(v8::String::new(scope, "boom").unwrap().into()));
+        .strict_equals(v8::String::new(try_catch, "boom").unwrap().into()));
       assert_eq!(v8::ModuleStatus::Uninstantiated, module.get_status());
     }
   }
