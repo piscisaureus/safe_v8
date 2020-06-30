@@ -83,6 +83,7 @@ use crate::function::FunctionCallbackInfo;
 use crate::function::PropertyCallbackInfo;
 use crate::Context;
 use crate::Data;
+use crate::Handle;
 use crate::Isolate;
 use crate::Local;
 use crate::Message;
@@ -137,9 +138,10 @@ pub struct HandleScope<'s, C = Context> {
 impl<'s> HandleScope<'s> {
   #[allow(clippy::new_ret_no_self)]
   pub fn new<P: param::NewHandleScope<'s>>(param: &'s mut P) -> P::NewScope {
+    let context_opt = param.maybe_get_context();
     param
       .get_scope_data_mut()
-      .new_handle_scope_data()
+      .new_handle_scope_data(context_opt)
       .as_scope()
   }
 
@@ -611,6 +613,9 @@ mod param {
 
   pub trait NewHandleScope<'s>: data::GetScopeData {
     type NewScope: Scope;
+    fn maybe_get_context(&self) -> Option<NonNull<Context>> {
+      None
+    }
   }
 
   impl<'s> NewHandleScope<'s> for Isolate {
@@ -619,6 +624,13 @@ mod param {
 
   impl<'s> NewHandleScope<'s> for OwnedIsolate {
     type NewScope = HandleScope<'s, ()>;
+  }
+
+  impl<'s, H: Handle<Data = Context>> NewHandleScope<'s> for H {
+    type NewScope = HandleScope<'s>;
+    fn maybe_get_context(&self) -> Option<NonNull<Context>> {
+      unsafe { NonNull::from(self.get_unchecked()) }
+    }
   }
 
   impl<'s, 'p: 's, P: NewHandleScope<'s>> NewHandleScope<'s>
@@ -846,20 +858,46 @@ pub(crate) mod data {
       })
     }
 
-    pub(super) fn new_handle_scope_data(&mut self) -> &mut Self {
+    pub(super) fn new_handle_scope_data(
+      &mut self,
+      context_opt: Option<NonNull<Context>>,
+    ) -> &mut Self {
       self.new_scope_data_with(|data| {
         let isolate = data.isolate;
         data.scope_type_specific_data.init_with(|| {
           ScopeTypeSpecificData::HandleScope {
             raw_handle_scope: unsafe { raw::HandleScope::uninit() },
+            raw_context_scope: None,
           }
         });
         match &mut data.scope_type_specific_data {
-          ScopeTypeSpecificData::HandleScope { raw_handle_scope } => {
-            unsafe { raw_handle_scope.init(isolate) };
-          }
+          ScopeTypeSpecificData::HandleScope {
+            raw_handle_scope,
+            raw_context_scope,
+          } => unsafe {
+            raw_handle_scope.init(isolate);
+
+            debug_assert!(raw_context_scope.is_none());
+            match context_opt {
+              None => {}
+              Some(context_nn) => {
+                let local_context_raw = raw::v8__Local__New(
+                  isolate.as_ptr(),
+                  context_nn.as_ptr() as *const _ as *const Data,
+                ) as *const Context;
+                let local_context_nn =
+                  NonNull::new_unchecked(local_context_raw as *mut _);
+                let local_context = Local::from_non_null(local_context_nn);
+                ptr::write(
+                  raw_context_scope,
+                  Some(raw::ContextScope::new(local_context)),
+                );
+                data.context.set(Some(local_context_nn));
+              }
+            }
+          },
           _ => unreachable!(),
-        }
+        };
       })
     }
 
@@ -1203,6 +1241,7 @@ pub(crate) mod data {
     },
     HandleScope {
       raw_handle_scope: raw::HandleScope,
+      raw_context_scope: Option<raw::ContextScope>,
     },
     EscapableHandleScope {
       raw_handle_scope: raw::HandleScope,

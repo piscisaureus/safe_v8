@@ -145,10 +145,8 @@ impl<T> Global<T> {
     }
   }
 
-  pub fn get<'a>(&'a self, isolate: &mut Isolate) -> &'a T {
-    let (data, host_isolate) = self.get_raw_info();
-    assert!(host_isolate.match_isolate(HostIsolate::new(isolate)));
-    unsafe { &*data }
+  pub fn get<'a>(&'a self, scope: &mut Isolate) -> &'a T {
+    Handle::get(self, scope)
   }
 }
 
@@ -184,7 +182,46 @@ impl<T> Drop for Global<T> {
 
 pub trait Handle {
   type Data;
+
+  #[doc(hidden)]
   fn get_raw_info(&self) -> (*const Self::Data, HostIsolate);
+
+  /// Reads the inner value contained in this handle
+  ///
+  /// # Panics
+  ///
+  /// This function panics under the following circumstances:
+  /// - The handle is not hosted by the Isolate that is currently entered in
+  ///   the provided scope.
+  /// - The Isolate that hosts this handle has been disposed.
+  fn get<'a>(&'a self, scope: &mut Isolate) -> &'a Self::Data {
+    let (data, host_isolate) = self.get_raw_info();
+    assert!(host_isolate
+      .apply_scope(scope)
+      .match_isolate(HostIsolate::new(scope)));
+    unsafe { &*data }
+  }
+
+  /// Reads the inner value contained in this handle, _without_ verifying that
+  /// the this handle is hosted by the currently active Isolate.
+  ///
+  /// # Safety
+  ///
+  /// Using a V8 heap value with another Isolate than the Isolate that hosts
+  /// it is not possible under any circumstance. Doing so leads to undefined
+  /// behavior, likely a crash.const
+  ///
+  /// # Panics
+  ///
+  /// This function panics if the Isolate that hosts the handle has been
+  /// disposed.
+  unsafe fn get_unchecked(&self) -> &Self::Data {
+    let (data, host_isolate) = self.get_raw_info();
+    if let HostIsolate::Disposed = host_isolate {
+      panic!("attempt to access Handle hosten by disposed Isolate");
+    }
+    &*data
+  }
 }
 
 impl<'s, T> Handle for Local<'s, T> {
