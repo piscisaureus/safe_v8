@@ -1,6 +1,5 @@
 use std::convert::TryInto;
 use std::mem::MaybeUninit;
-use std::ptr::null;
 
 use crate::support::int;
 use crate::support::MapFnFrom;
@@ -39,16 +38,16 @@ pub type ResolveCallback<'a> = extern "C" fn(
   Local<'a, Context>,
   Local<'a, String>,
   Local<'a, Module>,
-) -> *const Module;
+) -> Option<Local<'a, Module>>;
 
 // Windows x64 ABI: Local<Module> returned on the stack.
 #[cfg(target_os = "windows")]
 pub type ResolveCallback<'a> = extern "C" fn(
-  *mut *const Module,
+  *mut MaybeUninit<Option<Local<'a, Module>>>,
   Local<'a, Context>,
   Local<'a, String>,
   Local<'a, Module>,
-) -> *mut *const Module;
+) -> *mut Option<Local<'a, Module>>;
 
 impl<'a, F> MapFnFrom<F> for ResolveCallback<'a>
 where
@@ -71,12 +70,14 @@ where
 
   #[cfg(target_os = "windows")]
   fn mapping() -> Self {
-    let f = |ret_ptr, context, specifier, referrer| {
-      let r = (F::get())(context, specifier, referrer)
-        .map(|r| -> *const Module { &*r })
-        .unwrap_or(null());
-      unsafe { std::ptr::write(ret_ptr, r) }; // Write result to stack.
-      ret_ptr // Return stack pointer to the return value.
+    let f = |ret_ptr: *mut MaybeUninit<_>, context, specifier, referrer| {
+      let r = (F::get())(context, specifier, referrer);
+      unsafe {
+        // Write result to stack.
+        *ret_ptr = MaybeUninit::new(r);
+        // Return a pointer to the on-stack the return value.
+        (*ret_ptr).as_mut_ptr()
+      }
     };
     f.to_c_fn()
   }

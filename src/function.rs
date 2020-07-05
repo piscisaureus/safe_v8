@@ -1,5 +1,4 @@
 use std::convert::TryFrom;
-use std::marker::PhantomData;
 
 use crate::support::MapFnFrom;
 use crate::support::MapFnTo;
@@ -60,31 +59,31 @@ extern "C" {
   fn v8__ReturnValue__Get(this: *const ReturnValue) -> *const Value;
 }
 
-// Npte: the 'cb lifetime is required because the ReturnValue object must not
+// Npte: the 'cb lifetiv8__ReturnValue__Setme is required because the ReturnValue object must not
 // outlive the FunctionCallbackInfo/PropertyCallbackInfo object from which it
 // is derived.
 #[repr(C)]
-pub struct ReturnValue<'cb>(*mut Value, PhantomData<&'cb ()>);
+pub struct ReturnValue(*mut Value);
 
 /// In V8 ReturnValue<> has a type parameter, but
 /// it turns out that in most of the APIs it's ReturnValue<Value>
 /// and for our purposes we currently don't need
 /// other types. So for now it's a simplified version.
-impl<'cb> ReturnValue<'cb> {
+impl ReturnValue {
   fn from_function_callback_info(info: *const FunctionCallbackInfo) -> Self {
     let slot = unsafe { v8__FunctionCallbackInfo__GetReturnValue(info) };
-    Self(slot, PhantomData)
+    Self(slot)
   }
 
   fn from_property_callback_info(info: *const PropertyCallbackInfo) -> Self {
     let slot = unsafe { v8__PropertyCallbackInfo__GetReturnValue(info) };
-    Self(slot, PhantomData)
+    Self(slot)
   }
 
   // NOTE: simplest setter, possibly we'll need to add
   // more setters specialized per type
   pub fn set(&mut self, value: Local<Value>) {
-    unsafe { v8__ReturnValue__Set(&mut *self, &*value) }
+    unsafe { v8__ReturnValue__Set(self, &*value) }
   }
 
   /// Getter. Creates a new Local<> so it comes with a certain performance
@@ -117,28 +116,24 @@ pub struct PropertyCallbackInfo {
   args: *mut Opaque,
 }
 
-pub struct FunctionCallbackArguments<'s> {
+pub struct FunctionCallbackArguments {
   info: *const FunctionCallbackInfo,
-  phantom: PhantomData<&'s ()>,
 }
 
-impl<'s> FunctionCallbackArguments<'s> {
+impl FunctionCallbackArguments {
   fn from_function_callback_info(info: *const FunctionCallbackInfo) -> Self {
-    Self {
-      info,
-      phantom: PhantomData,
-    }
+    Self { info }
   }
 
   /// Returns the receiver. This corresponds to the "this" value.
-  pub fn this(&self) -> Local<'s, Object> {
+  pub fn this(&self) -> Local<Object> {
     unsafe {
       Local::from_raw(v8__FunctionCallbackInfo__This(self.info)).unwrap()
     }
   }
 
   /// Returns the data argument specified when creating the callback.
-  pub fn data(&self) -> Option<Local<'s, Value>> {
+  pub fn data(&self) -> Option<Local<Value>> {
     unsafe { Local::from_raw(v8__FunctionCallbackInfo__Data(self.info)) }
   }
 
@@ -153,7 +148,7 @@ impl<'s> FunctionCallbackArguments<'s> {
 
   /// Accessor for the available arguments. Returns `undefined` if the index is
   /// out of bounds.
-  pub fn get(&self, i: int) -> Local<'s, Value> {
+  pub fn get(&self, i: int) -> Local<Value> {
     unsafe {
       Local::from_raw(v8__FunctionCallbackInfo__GetArgument(self.info, i))
         .unwrap()
@@ -161,17 +156,13 @@ impl<'s> FunctionCallbackArguments<'s> {
   }
 }
 
-pub struct PropertyCallbackArguments<'s> {
+pub struct PropertyCallbackArguments {
   info: *const PropertyCallbackInfo,
-  phantom: PhantomData<&'s ()>,
 }
 
-impl<'s> PropertyCallbackArguments<'s> {
+impl PropertyCallbackArguments {
   fn from_property_callback_info(info: *const PropertyCallbackInfo) -> Self {
-    Self {
-      info,
-      phantom: PhantomData,
-    }
+    Self { info }
   }
 
   /// Returns the receiver. In many cases, this is the object on which the
@@ -213,7 +204,7 @@ impl<'s> PropertyCallbackArguments<'s> {
   ///
   ///   CompileRun("obj.a = 'obj'; var r = {a: 'r'}; Reflect.get(obj, 'x', r)");
   /// ```
-  pub fn this(&self) -> Local<'s, Object> {
+  pub fn this(&self) -> Local<Object> {
     unsafe {
       Local::from_raw(v8__PropertyCallbackInfo__This(self.info)).unwrap()
     }
@@ -224,13 +215,18 @@ pub type FunctionCallback = extern "C" fn(*const FunctionCallbackInfo);
 
 impl<F> MapFnFrom<F> for FunctionCallback
 where
-  F: UnitType + Fn(&mut HandleScope, FunctionCallbackArguments, ReturnValue),
+  F: UnitType
+    + for<'a, 's> Fn(
+      &'a mut HandleScope<'s>,
+      &'a FunctionCallbackArguments,
+      &'a mut ReturnValue,
+    ),
 {
   fn mapping() -> Self {
     let f = |info: *const FunctionCallbackInfo| {
       let scope = &mut unsafe { CallbackScope::new(&*info) };
-      let args = FunctionCallbackArguments::from_function_callback_info(info);
-      let rv = ReturnValue::from_function_callback_info(info);
+      let args = &FunctionCallbackArguments::from_function_callback_info(info);
+      let rv = &mut ReturnValue::from_function_callback_info(info);
       (F::get())(scope, args, rv);
     };
     f.to_c_fn()
@@ -242,16 +238,21 @@ where
 pub type AccessorNameGetterCallback<'s> =
   extern "C" fn(Local<'s, Name>, *const PropertyCallbackInfo);
 
-impl<F> MapFnFrom<F> for AccessorNameGetterCallback<'_>
+impl<'s, F> MapFnFrom<F> for AccessorNameGetterCallback<'s>
 where
   F: UnitType
-    + Fn(&mut HandleScope, Local<Name>, PropertyCallbackArguments, ReturnValue),
+    + for<'a> Fn(
+      &'a mut HandleScope<'s>,
+      Local<'s, Name>,
+      &'a PropertyCallbackArguments,
+      &'a mut ReturnValue,
+    ),
 {
   fn mapping() -> Self {
-    let f = |key: Local<Name>, info: *const PropertyCallbackInfo| {
+    let f = |key: Local<'s, Name>, info: *const PropertyCallbackInfo| {
       let scope = &mut unsafe { CallbackScope::new(&*info) };
-      let args = PropertyCallbackArguments::from_property_callback_info(info);
-      let rv = ReturnValue::from_property_callback_info(info);
+      let args = &PropertyCallbackArguments::from_property_callback_info(info);
+      let rv = &mut ReturnValue::from_property_callback_info(info);
       (F::get())(scope, key, args, rv);
     };
     f.to_c_fn()

@@ -305,8 +305,8 @@ fn microtasks() {
     let function = v8::Function::new(
       scope,
       |_: &mut v8::HandleScope,
-       _: v8::FunctionCallbackArguments,
-       _: v8::ReturnValue| {
+       _: &v8::FunctionCallbackArguments,
+       _: &mut v8::ReturnValue| {
         CALL_COUNT.fetch_add(1, Ordering::SeqCst);
       },
     )
@@ -1072,8 +1072,8 @@ fn create_message_argument_lifetimes() {
     let create_message = v8::Function::new(
       scope,
       |scope: &mut v8::HandleScope,
-       args: v8::FunctionCallbackArguments,
-       mut rv: v8::ReturnValue| {
+       args: &v8::FunctionCallbackArguments,
+       rv: &mut v8::ReturnValue| {
         let message = v8::Exception::create_message(scope, args.get(0));
         let message_str = message.get(scope);
         rv.set(message_str.into())
@@ -1304,8 +1304,8 @@ fn object_set_accessor() {
 
     let getter = |scope: &mut v8::HandleScope,
                   key: v8::Local<v8::Name>,
-                  args: v8::PropertyCallbackArguments,
-                  mut rv: v8::ReturnValue| {
+                  args: &v8::PropertyCallbackArguments,
+                  rv: &mut v8::ReturnValue| {
       let this = args.this();
 
       let expected_key = v8::String::new(scope, "getter_key").unwrap();
@@ -1428,8 +1428,8 @@ fn proxy() {
 
 fn fn_callback(
   scope: &mut v8::HandleScope,
-  args: v8::FunctionCallbackArguments,
-  mut rv: v8::ReturnValue,
+  args: &v8::FunctionCallbackArguments,
+  rv: &mut v8::ReturnValue,
 ) {
   assert_eq!(args.length(), 0);
   let s = v8::String::new(scope, "Hello callback!").unwrap();
@@ -1439,8 +1439,8 @@ fn fn_callback(
 
 fn fn_callback2(
   scope: &mut v8::HandleScope,
-  args: v8::FunctionCallbackArguments,
-  mut rv: v8::ReturnValue,
+  args: &v8::FunctionCallbackArguments,
+  rv: &mut v8::ReturnValue,
 ) {
   assert_eq!(args.length(), 2);
   let arg1_val = v8::String::new(scope, "arg1").unwrap();
@@ -1460,16 +1460,16 @@ fn fn_callback2(
 
 fn fortytwo_callback(
   scope: &mut v8::HandleScope,
-  _: v8::FunctionCallbackArguments,
-  mut rv: v8::ReturnValue,
+  _: &v8::FunctionCallbackArguments,
+  rv: &mut v8::ReturnValue,
 ) {
   rv.set(v8::Integer::new(scope, 42).into());
 }
 
 fn data_is_true_callback(
   _scope: &mut v8::HandleScope,
-  args: v8::FunctionCallbackArguments,
-  _rv: v8::ReturnValue,
+  args: &v8::FunctionCallbackArguments,
+  _rv: &mut v8::ReturnValue,
 ) {
   let data = args.data();
   assert!(data.is_some());
