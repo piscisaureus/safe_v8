@@ -1132,9 +1132,9 @@ struct InternalFieldData {
   uint32_t data;
 };
 
-std::vector<InternalFieldData*> deserialized_data;
+static std::vector<InternalFieldData*> deserialized_data;
 
-void DeserializeInternalFields(v8::Local<v8::Object> holder, int index,
+static void DeserializeInternalFields(v8::Local<v8::Object> holder, int index,
                                v8::StartupData payload, void* data) {
   assert(data == nullptr);
   if (payload.raw_size == 0) {
@@ -1704,8 +1704,8 @@ v8::Isolate* v8__SnapshotCreator__GetIsolate(const v8::SnapshotCreator& self) {
   return self_ptr->GetIsolate();
 }
 
-v8::StartupData SerializeInternalFields(v8::Local<v8::Object> holder, int index,
-                                        void* data) {
+static v8::StartupData SerializeInternalFields(v8::Local<v8::Object> holder,
+                                               int index, void* data) {
   assert(data == nullptr);
   InternalFieldData* embedder_field = static_cast<InternalFieldData*>(
       holder->GetAlignedPointerFromInternalField(index));
